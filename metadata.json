@@ -1,0 +1,6 @@
+{
+  "name": "IFIOK-EN — Global Digital Empowerment Network",
+  "description": "Empower. Connect. Earn. Grow. A global digital ecosystem uniting education, SME business services, freelance talent, verified opportunities, commerce, and community powered by Pi Network.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

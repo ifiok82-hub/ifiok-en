@@ -1,0 +1,854 @@
+import {
+  ArrowRight,
+  BookOpen,
+  Briefcase,
+  Building2,
+  ChevronDown,
+  Globe,
+  Moon,
+  ShieldCheck,
+  ShoppingBag,
+  Sun,
+  Users,
+} from 'lucide-react';
+import { useState } from 'react';
+import academyImg from '../assets/images/academy_blockchain_course_1794641802089.jpg';
+import businessImg from '../assets/images/business_hub_advisory_1794641802926.jpg';
+import communityImg from '../assets/images/community_summit_collab_1794641802970.jpg';
+import heroImg from '../assets/images/hero_global_network_1794641803186.jpg';
+import marketImg from '../assets/images/market_digital_commerce_1794641803851.jpg';
+import { formatPiPrice, TRANSLATIONS } from '../lib/i18n.ts';
+import type {
+  AppView,
+  CurrencyCode,
+  DivisionTab,
+  LanguageCode,
+  PublicSummary,
+  UserProfile,
+} from '../types/platform.ts';
+import { BrandLogo } from './BrandLogo.tsx';
+import type { PolicyKey } from './LegalModal.tsx';
+
+interface HomePageProps {
+  summary: PublicSummary | null;
+  loading: boolean;
+  user: UserProfile | null;
+  theme: 'light' | 'dark';
+  language: LanguageCode;
+  currency: CurrencyCode;
+  onToggleTheme: () => void;
+  onChangeLanguage: (lang: LanguageCode) => void;
+  onChangeCurrency: (curr: CurrencyCode) => void;
+  onOpenAuth: (mode?: 'login' | 'register') => void;
+  onOpenDivision: (tab: DivisionTab) => void;
+  onNavigateView: (view: AppView) => void;
+  onOpenPolicy: (policy: PolicyKey) => void;
+}
+
+const FAQS = [
+  {
+    q: 'How does Pi Network integration work on IFIOK-EN?',
+    a: 'IFIOK-EN integrates the Official Pi SDK in Testnet mode for authentication and eligible transactions. Every payment is initiated via Pi Browser, approved on our server, and verified against Pi Platform APIs before orders or enrolments are fulfilled. Mainnet stays disabled until official approvals and credentials are active.',
+  },
+  {
+    q: 'Are jobs, grants, courses, and marketplace products vetted?',
+    a: 'Yes. IFIOK-EN enforces strict server-side moderation and verification queues. We never publish fabricated listings, fake sellers, or simulated reviews. Only verified organisations, instructors, freelancers, and sellers appear publicly.',
+  },
+  {
+    q: 'Can I use IFIOK-EN outside Pi Browser?',
+    a: 'Yes. Members around the world can register and sign in via Email Authentication from any desktop, tablet, or smartphone browser, configure their country and time zone, and manage courses, applications, and community discussions.',
+  },
+  {
+    q: 'What is the platform revenue model?',
+    a: 'IFIOK-EN sustains operations transparently through optional creator and business subscriptions, verified course enrolments, and disclosed commissions on completed freelance and marketplace transactions. We never promise guaranteed earnings or investment returns.',
+  },
+];
+
+export function HomePage({
+  summary,
+  loading,
+  user,
+  theme,
+  language,
+  currency,
+  onToggleTheme,
+  onChangeLanguage,
+  onChangeCurrency,
+  onOpenAuth,
+  onOpenDivision,
+  onNavigateView,
+  onOpenPolicy,
+}: HomePageProps) {
+  const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const t = TRANSLATIONS[language];
+  const usdRate = summary?.settings.informationalUsdPerPi ?? 1.0;
+
+  return (
+    <div id="top" className="min-h-screen bg-slate-50 dark:bg-[#070C1B] text-slate-900 dark:text-slate-100">
+      {/* Optional admin announcement strip */}
+      {summary?.settings.announcementBanner && (
+        <div className="bg-[#0E1A36] dark:bg-purple-950/80 text-amber-300 text-xs font-medium py-2 px-4 text-center border-b border-amber-500/20">
+          {summary.settings.announcementBanner}
+        </div>
+      )}
+
+      {/* HERO SECTION */}
+      <section className="border-b border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#081024]">
+        <div className="mx-auto max-w-[1280px] px-4 sm:px-6 py-12 lg:py-20">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-stretch">
+            {/* Left focal narrative */}
+            <div className="lg:col-span-6 flex flex-col justify-center space-y-6">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <BrandLogo size="lg" />
+                <div className="flex items-center gap-3 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <span>{t.slogan}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>Pi Testnet Active</span>
+                </div>
+              </div>
+
+              <h1
+                className="font-display font-extrabold tracking-tight text-slate-950 dark:text-white leading-[1.08]"
+                style={{ fontSize: 'clamp(2.25rem, 4vw, 3.6rem)', textWrap: 'balance' }}
+              >
+                {summary?.settings.heroHeadline || 'Your World. Your Opportunities. Your Digital Future.'}
+              </h1>
+
+              <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-xl">
+                {summary?.settings.heroSubheadline ||
+                  'IFIOK-EN connects global learners, verified SMEs, independent talent, and Pi-settled digital commerce inside one audited, role-governed platform.'}
+              </p>
+
+              {/* Primary + Secondary CTAs */}
+              <div className="flex flex-wrap items-center gap-4 pt-2">
+                <button
+                  type="button"
+                  onClick={() => (user ? onNavigateView('dashboard') : onOpenAuth('register'))}
+                  className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg text-sm font-semibold bg-[#0E1A36] text-white hover:bg-[#192C58] dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                >
+                  {user ? 'Open Member Dashboard' : t.joinBtn}
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('divisions-section');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    else onOpenDivision('academy');
+                  }}
+                  className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg text-sm font-semibold border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {t.exploreBtn}
+                </button>
+              </div>
+
+              {/* Compact utility controls (Theme + Language + Reference Currency) */}
+              <div className="pt-3 flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={onToggleTheme}
+                  className="inline-flex items-center gap-1.5 font-medium hover:text-slate-950 dark:hover:text-white cursor-pointer"
+                >
+                  {theme === 'dark' ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5" />}
+                  <span>{theme === 'dark' ? 'Light Theme' : 'Dark Theme'}</span>
+                </button>
+                <span aria-hidden="true">·</span>
+                <label className="inline-flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5" />
+                  <select
+                    aria-label="Select Language"
+                    value={language}
+                    onChange={(e) => onChangeLanguage(e.target.value as LanguageCode)}
+                    className="bg-transparent font-medium text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
+                  >
+                    <option value="en" className="dark:bg-[#0D152B]">English</option>
+                    <option value="fr" className="dark:bg-[#0D152B]">Français</option>
+                    <option value="es" className="dark:bg-[#0D152B]">Español</option>
+                    <option value="pt" className="dark:bg-[#0D152B]">Português</option>
+                  </select>
+                </label>
+                <span aria-hidden="true">·</span>
+                <label className="inline-flex items-center gap-1.5">
+                  <span>Ref Display:</span>
+                  <select
+                    aria-label="Select Informational Reference Currency"
+                    value={currency}
+                    onChange={(e) => onChangeCurrency(e.target.value as CurrencyCode)}
+                    className="bg-transparent font-mono font-medium text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
+                  >
+                    <option value="PI" className="dark:bg-[#0D152B]">Pi (π) Native</option>
+                    <option value="USD" className="dark:bg-[#0D152B]">Pi + USD info</option>
+                    <option value="EUR" className="dark:bg-[#0D152B]">Pi + EUR info</option>
+                    <option value="GBP" className="dark:bg-[#0D152B]">Pi + GBP info</option>
+                    <option value="NGN" className="dark:bg-[#0D152B]">Pi + NGN info</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            {/* Right 16:9 / full-height hero media carrier */}
+            <div className="lg:col-span-6">
+              <div className="relative h-full min-h-[300px] lg:min-h-[430px] rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-gradient-to-br from-[#0E1A36] via-[#2B1B54] to-[#081024]">
+                <img
+                  src={heroImg}
+                  alt="International entrepreneurs and engineers collaborating inside the IFIOK-EN innovation pavilion"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
+                <div className="absolute bottom-5 left-5 right-5 flex flex-wrap items-end justify-between gap-4 text-white">
+                  <div>
+                    <p className="text-xs font-medium text-amber-300">Global Digital Empowerment Network</p>
+                    <p className="text-sm sm:text-base font-display font-semibold mt-0.5">
+                      Six integrated divisions settled on Pi Testnet
+                    </p>
+                  </div>
+                  <div className="text-right font-mono text-xs text-slate-200 tabular-nums">
+                    <div>Settlement: Pi (π)</div>
+                    <div>Mainnet: Locked until approval</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Full-width database-backed telemetry strip below hero split */}
+          <div className="mt-10 pt-8 border-t border-slate-200 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-6">
+            {[
+              { label: 'Active Members', value: summary?.stats.members ?? 0 },
+              { label: 'Verified Businesses', value: summary?.stats.verifiedBusinesses ?? 0 },
+              { label: 'Academy Courses', value: summary?.stats.approvedCourses ?? 0 },
+              { label: 'Freelance Services', value: summary?.stats.approvedServices ?? 0 },
+              { label: 'Open Opportunities', value: summary?.stats.approvedOpportunities ?? 0 },
+              { label: 'Market Listings', value: summary?.stats.approvedProducts ?? 0 },
+            ].map((stat) => (
+              <div key={stat.label}>
+                <div className="text-2xl font-display font-bold font-mono tabular-nums text-slate-950 dark:text-white">
+                  {loading ? '—' : stat.value}
+                </div>
+                <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">{stat.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* SIX BUSINESS DIVISIONS (Asymmetric Bento Grid) */}
+      <section id="divisions-section" className="py-16 lg:py-24 mx-auto max-w-[1280px] px-4 sm:px-6">
+        <div className="max-w-2xl mb-12">
+          <p className="text-xs font-semibold text-purple-700 dark:text-amber-400 mb-2">Integrated Ecosystem Architecture</p>
+          <h2 className="text-3xl sm:text-4xl font-display font-bold tracking-tight text-slate-950 dark:text-white">
+            Six specialized divisions built for real participation
+          </h2>
+          <p className="mt-3 text-slate-600 dark:text-slate-300 leading-relaxed">
+            Every division connects to one unified account, role-based dashboard, and server-verified Pi settlement ledger.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {/* 01. IFIOK ACADEMY (Span 2 on lg for visual hierarchy) */}
+          <article className="lg:col-span-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-hidden grid grid-cols-1 sm:grid-cols-2">
+            <div className="h-56 sm:h-auto bg-slate-900">
+              <img
+                src={academyImg}
+                alt="IFIOK Academy technology instruction session"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="p-6 sm:p-8 flex flex-col justify-between space-y-5">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  <BookOpen className="w-4 h-4 text-purple-700 dark:text-amber-400" />
+                  <span>01. IFIOK Academy</span>
+                </div>
+                <h3 className="text-xl font-display font-bold text-slate-950 dark:text-white">
+                  Practical technology, Web3 & entrepreneurship training
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Structured courses led by vetted instructors with lesson progress tracking and publicly verifiable completion certificates.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onOpenDivision('academy')}
+                className="inline-flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+              >
+                Explore Academy <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </article>
+
+          {/* 02. IFIOK BUSINESS HUB */}
+          <article className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-hidden flex flex-col">
+            <div className="h-44 bg-slate-900">
+              <img
+                src={businessImg}
+                alt="IFIOK Business Hub executive advisory consultation"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="p-6 flex-1 flex flex-col justify-between space-y-4">
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  <Building2 className="w-4 h-4 text-purple-700 dark:text-amber-400" />
+                  <span>02. IFIOK Business Hub</span>
+                </div>
+                <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
+                  Verified SME directory & corporate consulting
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Business registration assistance, verified SME profiles, promotion, and cross-border partnership matching.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onOpenDivision('business')}
+                className="inline-flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+              >
+                Open Business Hub <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </article>
+
+          {/* 03. IFIOK FREELANCE */}
+          <article className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 sm:p-7 flex flex-col justify-between space-y-5">
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <Briefcase className="w-4 h-4 text-purple-700 dark:text-amber-400" />
+                <span>03. IFIOK Freelance</span>
+              </div>
+              <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
+                Commissioned digital services & tracked delivery
+              </h3>
+              <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                Software development, design, writing, translation, and consulting with structured project milestones and dispute governance.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenDivision('freelance')}
+              className="inline-flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+            >
+              Browse Services <ArrowRight className="w-4 h-4" />
+            </button>
+          </article>
+
+          {/* 04. IFIOK OPPORTUNITIES */}
+          <article className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 sm:p-7 flex flex-col justify-between space-y-5">
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <ShieldCheck className="w-4 h-4 text-purple-700 dark:text-amber-400" />
+                <span>04. IFIOK Opportunities</span>
+              </div>
+              <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
+                Vetted jobs, scholarships, grants & internships
+              </h3>
+              <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                Every listing undergoes administrator verification before publication, with direct application tracking in your dashboard.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenDivision('opportunities')}
+              className="inline-flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+            >
+              View Opportunities <ArrowRight className="w-4 h-4" />
+            </button>
+          </article>
+
+          {/* 05. IFIOK MARKET */}
+          <article className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-hidden flex flex-col">
+            <div className="h-44 bg-slate-900">
+              <img
+                src={marketImg}
+                alt="IFIOK Market creator hardware and digital commerce"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="p-6 flex-1 flex flex-col justify-between space-y-4">
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  <ShoppingBag className="w-4 h-4 text-purple-700 dark:text-amber-400" />
+                  <span>05. IFIOK Market</span>
+                </div>
+                <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
+                  Physical, digital, Web3 & Pi ecosystem commerce
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Verified sellers offering real products, digital tools, Pi apps, and gaming assets settled in Pi.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onOpenDivision('market')}
+                className="inline-flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+              >
+                Visit Marketplace <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </article>
+
+          {/* 06. IFIOK COMMUNITY (Full-width feature banner below) */}
+          <article className="md:col-span-2 lg:col-span-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-hidden grid grid-cols-1 lg:grid-cols-12">
+            <div className="lg:col-span-5 h-56 lg:h-auto bg-slate-900">
+              <img
+                src={communityImg}
+                alt="IFIOK Community global summit collaboration"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-center space-y-4">
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <Users className="w-4 h-4 text-purple-700 dark:text-amber-400" />
+                <span>06. IFIOK Community</span>
+              </div>
+              <h3 className="text-2xl font-display font-bold text-slate-950 dark:text-white">
+                Global professional networking & moderated collaboration groups
+              </h3>
+              <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
+                Connect with founders, instructors, and technical peers across time zones. Direct messaging includes built-in rate controls and instant abuse reporting.
+              </p>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => onOpenDivision('community')}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-slate-900 text-white dark:bg-slate-800 dark:text-white hover:bg-slate-800 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Enter Community Hub <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      {/* LIVE DATABASE SHOWCASE: VERIFIED BUSINESSES, COURSES, OPPORTUNITIES, MARKETPLACE, COMMUNITY */}
+      <section className="py-16 border-y border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#081024]">
+        <div className="mx-auto max-w-[1280px] px-4 sm:px-6 space-y-16">
+          {/* Featured Verified Businesses & Featured Courses */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+            <div>
+              <div className="flex items-baseline justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-display font-bold text-slate-950 dark:text-white">Featured Verified Businesses</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Administrator-verified SMEs and corporate partners</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenDivision('business')}
+                  className="text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer whitespace-nowrap"
+                >
+                  View Directory
+                </button>
+              </div>
+              {summary && summary.businesses.length > 0 ? (
+                <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl">
+                  {summary.businesses.slice(0, 4).map((b) => (
+                    <div key={b.id} className="p-4 flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="font-semibold text-slate-900 dark:text-white">{b.business_name}</h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          {b.sector} · {b.country} · Verified SME
+                        </p>
+                        <p className="text-sm text-slate-600 dark:text-slate-300 mt-2 line-clamp-2">{b.summary}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onOpenDivision('business')}
+                        className="text-xs font-semibold text-slate-700 dark:text-amber-400 hover:underline shrink-0 cursor-pointer"
+                      >
+                        Inspect
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-8 text-center space-y-3">
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    No verified businesses published yet.
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                    IFIOK-EN only displays genuine organisations vetted by platform administrators. Register your SME profile to apply for verification.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => (user ? onOpenDivision('business') : onOpenAuth('register'))}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 cursor-pointer"
+                  >
+                    Submit Business Profile
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="flex items-baseline justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-display font-bold text-slate-950 dark:text-white">Featured Academy Courses</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Approved courses with verifiable completion certificates</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenDivision('academy')}
+                  className="text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer whitespace-nowrap"
+                >
+                  All Courses
+                </button>
+              </div>
+              {summary && summary.courses.length > 0 ? (
+                <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl">
+                  {summary.courses.slice(0, 4).map((c) => {
+                    const price = formatPiPrice(c.price_pi, currency, usdRate);
+                    return (
+                      <div key={c.id} className="p-4 flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="font-semibold text-slate-900 dark:text-white">{c.title}</h3>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            {c.category} · {c.level} · {c.duration_hours} hrs · {c.instructor_name}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-mono text-sm font-semibold text-slate-900 dark:text-amber-400">
+                            {c.price_pi === 0 ? 'Free' : price.primary}
+                          </div>
+                          {price.reference && c.price_pi > 0 && (
+                            <div className="text-[11px] font-mono text-slate-500">{price.reference}</div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-8 text-center space-y-3">
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    No approved courses published yet.
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                    Instructors can submit accredited curricula from the Academy workspace for administrator approval.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDivision('academy')}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 cursor-pointer"
+                  >
+                    Open Academy
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Latest Verified Opportunities & Marketplace Preview */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+            <div>
+              <div className="flex items-baseline justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-display font-bold text-slate-950 dark:text-white">Latest Verified Opportunities</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Real jobs, internships, scholarships, and grants</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenDivision('opportunities')}
+                  className="text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer whitespace-nowrap"
+                >
+                  Explore All
+                </button>
+              </div>
+              {summary && summary.opportunities.length > 0 ? (
+                <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl">
+                  {summary.opportunities.slice(0, 4).map((o) => (
+                    <div key={o.id} className="p-4 flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="font-semibold text-slate-900 dark:text-white">{o.title}</h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 capitalize">
+                          {o.opportunity_type} · {o.organization_name} · {o.location} · Deadline {o.deadline}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onOpenDivision('opportunities')}
+                        className="text-xs font-semibold text-purple-700 dark:text-amber-400 hover:underline shrink-0 cursor-pointer"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-8 text-center space-y-3">
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    No verified opportunities active right now.
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                    We strictly prohibit fabricated job offers or fake grants. Verified employers and partner organisations can submit listings for review.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDivision('opportunities')}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 cursor-pointer"
+                  >
+                    Post an Opportunity
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="flex items-baseline justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-display font-bold text-slate-950 dark:text-white">IFIOK Market Showcase</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Genuine listings from verified Pi commerce sellers</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenDivision('market')}
+                  className="text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer whitespace-nowrap"
+                >
+                  Open Market
+                </button>
+              </div>
+              {summary && summary.products.length > 0 ? (
+                <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl">
+                  {summary.products.slice(0, 4).map((p) => {
+                    const price = formatPiPrice(p.price_pi, currency, usdRate);
+                    return (
+                      <div key={p.id} className="p-4 flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="font-semibold text-slate-900 dark:text-white">{p.title}</h3>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            {p.category} · {p.store_name} ({p.seller_country})
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-mono text-sm font-semibold text-slate-900 dark:text-amber-400">
+                            {price.primary}
+                          </div>
+                          {price.reference && <div className="text-[11px] font-mono text-slate-500">{price.reference}</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-8 text-center space-y-3">
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    Marketplace awaiting verified seller listings.
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                    IFIOK-EN never displays synthetic products, fake prices, or placeholder reviews. Verified sellers can list real goods and Web3 services.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDivision('market')}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 cursor-pointer"
+                  >
+                    Become a Verified Seller
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* HOW IT WORKS & WHY CHOOSE IFIOK-EN */}
+      <section className="py-16 lg:py-24 mx-auto max-w-[1280px] px-4 sm:px-6 space-y-20">
+        <div>
+          <div className="max-w-2xl mb-10">
+            <p className="text-xs font-semibold text-purple-700 dark:text-amber-400 mb-2">How It Works</p>
+            <h2 className="text-3xl font-display font-bold text-slate-950 dark:text-white">
+              From onboarding to verified digital participation
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[
+              {
+                step: '01. Register & Verify Role',
+                desc: 'Sign up via Email or Official Pi Network Testnet authentication and configure your country, timezone, and account role.',
+              },
+              {
+                step: '02. Build Capabilities',
+                desc: 'Enrol in vetted Academy courses, earn verifiable completion certificates, or register your SME business profile.',
+              },
+              {
+                step: '03. Deliver & Trade',
+                desc: 'Offer freelance services, apply to approved opportunities, or publish genuine products in IFIOK Market.',
+              },
+              {
+                step: '04. Server-Verified Pi Settlement',
+                desc: 'All eligible payments execute via Official Pi SDK Testnet with strict server approval, blockchain verification, and audit logging.',
+              },
+            ].map((item) => (
+              <div
+                key={item.step}
+                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-2.5"
+              >
+                <h3 className="font-display font-bold text-slate-950 dark:text-white">{item.step}</h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-[#0E1A36] text-white p-8 sm:p-12 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div className="lg:col-span-5 space-y-3">
+            <p className="text-xs font-semibold text-amber-400">Why Choose IFIOK-EN</p>
+            <h2 className="text-3xl font-display font-bold leading-tight">
+              Built on server-enforced security and honest economics
+            </h2>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Every listing, payment confirmation, role permission, and certificate is validated server-side against our relational database.
+            </p>
+          </div>
+          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-6">
+            {[
+              {
+                title: 'Zero Browser-Only Trust',
+                body: 'Pi payments are never confirmed on client state alone; server verification against api.minepi.com is mandatory.',
+              },
+              {
+                title: 'Role-Based Governance',
+                body: 'Separate permissions for members, students, instructors, freelancers, sellers, organisations, and global administrators.',
+              },
+              {
+                title: 'Transparent Revenue Model',
+                body: `Disclosed ${summary?.settings.freelanceCommissionPct ?? 8}% freelance and ${summary?.settings.marketplaceCommissionPct ?? 5}% marketplace fees with optional subscriptions.`,
+              },
+              {
+                title: 'Global Accessibility',
+                body: 'International phone codes, country and timezone selection, multilingual readiness, and informational currency views.',
+              },
+            ].map((point) => (
+              <div key={point.title} className="space-y-1.5 border-t border-white/15 pt-4">
+                <h3 className="font-display font-semibold text-amber-300 text-sm">{point.title}</h3>
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">{point.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* FREQUENTLY ASKED QUESTIONS */}
+        <div className="max-w-3xl mx-auto">
+          <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-950 dark:text-white text-center mb-8">
+            Frequently Asked Questions
+          </h2>
+          <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-[#0D152B]">
+            {FAQS.map((item, idx) => {
+              const isOpen = openFaq === idx;
+              return (
+                <div key={item.q}>
+                  <button
+                    type="button"
+                    onClick={() => setOpenFaq(isOpen ? null : idx)}
+                    className="w-full px-6 py-4 text-left flex items-center justify-between gap-4 font-display font-semibold text-sm sm:text-base text-slate-900 dark:text-white cursor-pointer"
+                  >
+                    <span>{item.q}</span>
+                    <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {isOpen && (
+                    <div className="px-6 pb-5 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                      {item.a}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* PROFESSIONAL FOOTER */}
+      <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#081024] py-12">
+        <div className="mx-auto max-w-[1280px] px-4 sm:px-6 grid grid-cols-1 md:grid-cols-12 gap-8">
+          <div className="md:col-span-4 space-y-3">
+            <BrandLogo size="md" />
+            <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">{t.slogan}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed max-w-xs">
+              Global Digital Empowerment Network uniting education, entrepreneurship, freelance collaboration, verified opportunities, and Pi-powered commerce.
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Support: {summary?.settings.supportEmail || 'support@ifiok-en.org'}
+            </p>
+          </div>
+
+          <div className="md:col-span-3 space-y-2 text-xs">
+            <h3 className="font-display font-semibold text-slate-900 dark:text-white mb-2">Business Divisions</h3>
+            {(
+              [
+                ['academy', 'IFIOK Academy'],
+                ['business', 'IFIOK Business Hub'],
+                ['freelance', 'IFIOK Freelance'],
+                ['opportunities', 'IFIOK Opportunities'],
+                ['market', 'IFIOK Market'],
+                ['community', 'IFIOK Community'],
+              ] as Array<[DivisionTab, string]>
+            ).map(([tab, label]) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => onOpenDivision(tab)}
+                className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="md:col-span-3 space-y-2 text-xs">
+            <h3 className="font-display font-semibold text-slate-900 dark:text-white mb-2">Trust & Governance Policies</h3>
+            {(
+              [
+                ['terms', 'Terms of Service'],
+                ['privacy', 'Privacy Policy'],
+                ['refund', 'Refund & Dispute Policy'],
+                ['seller', 'Seller & Creator Policy'],
+                ['community', 'Community Guidelines'],
+              ] as Array<[PolicyKey, string]>
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => onOpenPolicy(key)}
+                className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="md:col-span-2 space-y-2 text-xs">
+            <h3 className="font-display font-semibold text-slate-900 dark:text-white mb-2">Account Access</h3>
+            <button
+              type="button"
+              onClick={() => (user ? onNavigateView('dashboard') : onOpenAuth('login'))}
+              className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
+            >
+              {user ? 'Member Dashboard' : 'Member Sign In'}
+            </button>
+            {user?.roles.some((r) => ['super_admin', 'moderator', 'finance_admin'].includes(r)) && (
+              <button
+                type="button"
+                onClick={() => onNavigateView('admin')}
+                className="block font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+              >
+                Global Admin Console
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="mx-auto max-w-[1280px] px-4 sm:px-6 mt-10 pt-6 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
+          <span>© {new Date().getFullYear()} IFIOK-EN Global Digital Empowerment Network.</span>
+          <span>Pi (π) is the designated platform currency. Reference rates are informational only.</span>
+        </div>
+      </footer>
+    </div>
+  );
+}

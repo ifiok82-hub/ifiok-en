@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const PI_API_BASE = 'https://api.minepi.com/v2';
+const APP_STUDIO_LOGIN_URL =
+  'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com/pi/auth/v1/login';
 
 type Req = IncomingMessage & { body?: Record<string, unknown> };
 type Res = ServerResponse;
@@ -33,45 +34,52 @@ export default async function handler(req: Req, res: Res) {
 
   const body = await readJsonBody(req);
   const accessToken = typeof body.accessToken === 'string' ? body.accessToken.trim() : '';
-  const walletAddress = typeof body.walletAddress === 'string' ? body.walletAddress.trim().slice(0, 120) : '';
 
   if (!accessToken) {
     return sendJson(res, 400, { success: false, ok: false, error: 'Pi accessToken is required.' });
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4500);
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const meRes = await fetch(`${PI_API_BASE}/me`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+    // Exchange accessToken with App Studio; ignore any browser-supplied uid/username
+    const appStudioRes = await fetch(APP_STUDIO_LOGIN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessToken }),
       signal: controller.signal,
     });
-    if (!meRes.ok) {
+
+    if (!appStudioRes.ok) {
       return sendJson(res, 401, {
         success: false,
         ok: false,
-        error: 'Pi Platform rejected the accessToken.',
+        error: 'App Studio rejected the Pi accessToken.',
       });
     }
-    const piUser = (await meRes.json()) as { uid?: string; username?: string };
-    if (!piUser.uid || !piUser.username) {
-      return sendJson(res, 401, { success: false, ok: false, error: 'Incomplete Pi user profile.' });
+
+    const data = (await appStudioRes.json()) as {
+      sessionToken?: string;
+      user?: { uid?: string; username?: string };
+    };
+    if (!data?.user?.uid || !data?.user?.username) {
+      return sendJson(res, 401, { success: false, ok: false, error: 'Incomplete App Studio user identity.' });
     }
 
     return sendJson(res, 200, {
       success: true,
       ok: true,
+      sessionToken: data.sessionToken || '',
       piUser: {
-        uid: piUser.uid,
-        username: piUser.username,
-        walletAddress: walletAddress || undefined,
+        uid: data.user.uid,
+        username: data.user.username,
       },
     });
   } catch (err) {
     return sendJson(res, 502, {
       success: false,
       ok: false,
-      error: `Unable to verify Pi token: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Unable to reach App Studio auth server: ${err instanceof Error ? err.message : String(err)}`,
     });
   } finally {
     clearTimeout(timer);

@@ -35,7 +35,6 @@ export default async function handler(req: Req, res: Res) {
   const body = await readJsonBody(req);
   const paymentId = typeof body.paymentId === 'string' ? body.paymentId.trim() : '';
   const txid = typeof body.txid === 'string' ? body.txid.trim() : '';
-  const username = typeof body.username === 'string' ? body.username.trim().slice(0, 80) : '';
 
   if (!paymentId || !txid) {
     return sendJson(res, 400, { success: false, ok: false, error: 'paymentId and txid are required.' });
@@ -109,7 +108,7 @@ export default async function handler(req: Req, res: Res) {
       });
     }
 
-    console.log(`[VERCEL PI COMPLETE OK] paymentId=${paymentId} txid=${txid} username=${username || 'pi-user'}`);
+    console.log(`[VERCEL PI COMPLETE OK] paymentId=${paymentId} txid=${txid}`);
     return sendJson(res, 200, {
       success: true,
       ok: true,
@@ -117,7 +116,6 @@ export default async function handler(req: Req, res: Res) {
       paymentId,
       txid,
       amount: TESTNET_AMOUNT_PI,
-      username,
       status: 'completed',
       environment: 'testnet',
     });

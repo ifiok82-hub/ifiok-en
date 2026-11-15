@@ -51,11 +51,16 @@ export function verifyMfaPendingToken(token: string): number | null {
   }
 }
 
-export function setSessionCookie(res: Response, token: string) {
+export function setSessionCookie(res: Response, token: string, req?: Request) {
+  const isHttps =
+    process.env.NODE_ENV === 'production' ||
+    Boolean(req?.secure) ||
+    req?.headers['x-forwarded-proto'] === 'https';
+
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: isHttps ? 'none' : 'lax',
+    secure: isHttps,
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: '/',
   });

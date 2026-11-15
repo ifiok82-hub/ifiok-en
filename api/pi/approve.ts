@@ -37,7 +37,6 @@ export default async function handler(req: Req, res: Res) {
 
   const body = await readJsonBody(req);
   const paymentId = typeof body.paymentId === 'string' ? body.paymentId.trim() : '';
-  const username = typeof body.username === 'string' ? body.username.trim().slice(0, 80) : '';
 
   if (!paymentId) {
     return sendJson(res, 400, { success: false, ok: false, error: 'paymentId is required.' });
@@ -92,14 +91,13 @@ export default async function handler(req: Req, res: Res) {
       });
     }
 
-    console.log(`[VERCEL PI APPROVE OK] paymentId=${paymentId} username=${username || 'pi-user'}`);
+    console.log(`[VERCEL PI APPROVE OK] paymentId=${paymentId}`);
     return sendJson(res, 200, {
       success: true,
       ok: true,
       approved: true,
       paymentId,
       amount: TESTNET_AMOUNT_PI,
-      username,
       status: 'approved',
       environment: 'testnet',
     });

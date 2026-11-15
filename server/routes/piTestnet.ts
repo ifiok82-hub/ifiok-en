@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.ts';
+import { AppStudioAuthError, exchangePiTokenWithAppStudio } from '../lib/piAppStudioAuth.ts';
 import {
   assignRole,
   createNotification,
@@ -109,46 +110,18 @@ router.get('/status', (_req, res) => {
   });
 });
 
-// Verify Pi Network accessToken from Pi.authenticate(['username', 'payments', 'wallet_address'])
+// Exchange browser Pi accessToken with App Studio (/pi/auth/v1/login).
+// Browser-supplied uid/username fields are strictly ignored.
 router.post('/auth', async (req, res) => {
   const accessToken = typeof req.body?.accessToken === 'string' ? req.body.accessToken.trim() : '';
-  const walletAddress = typeof req.body?.walletAddress === 'string' ? req.body.walletAddress.trim().slice(0, 120) : '';
 
   if (!accessToken) {
     return res.status(400).json({ success: false, ok: false, error: 'Pi accessToken is required.' });
   }
 
   try {
-    const piRes = await fetchWithTimeout(
-      `${PI_API_BASE}/me`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-      4500
-    );
-
-    if (!piRes.ok) {
-      const errText = await piRes.text().catch(() => '');
-      recordSecurityEvent(
-        'pi_auth_rejected',
-        'warning',
-        null,
-        req.ip || '',
-        `Pi Platform /v2/me rejected accessToken (${piRes.status}): ${errText.slice(0, 180)}`
-      );
-      return res.status(401).json({
-        success: false,
-        ok: false,
-        error: 'Pi authentication verification failed with Pi Platform API.',
-      });
-    }
-
-    const piUser = (await piRes.json()) as { uid?: string; username?: string; credentials?: unknown };
-    if (!piUser.uid || !piUser.username) {
-      return res.status(401).json({
-        success: false,
-        ok: false,
-        error: 'Pi Platform API returned an incomplete user identity.',
-      });
-    }
+    const appStudio = await exchangePiTokenWithAppStudio(accessToken);
+    const piUser = appStudio.user;
 
     const existing = db.prepare(`SELECT id, status FROM users WHERE pi_uid = ?`).get(piUser.uid) as
       | { id: number; status: string }
@@ -175,12 +148,11 @@ router.post('/auth', async (req, res) => {
           id,
           'welcome',
           'Pi Account Connected',
-          `Verified Pi Network username @${piUser.username} connected on Testnet.`,
+          `Verified Pi Network username @${piUser.username} connected.`,
           'profile'
         );
-        recordAudit(id, 'pi_testnet_auth_registered', 'user', id, req.ip || '', {
+        recordAudit(id, 'pi_appstudio_auth_registered', 'user', id, req.ip || '', {
           pi_username: piUser.username,
-          walletAddress: walletAddress || undefined,
         });
         return id;
       })();
@@ -190,32 +162,46 @@ router.post('/auth', async (req, res) => {
         piUser.username,
         userId
       );
-      recordAudit(userId, 'pi_testnet_auth_login', 'user', userId, req.ip || '', {
+      recordAudit(userId, 'pi_appstudio_auth_login', 'user', userId, req.ip || '', {
         pi_username: piUser.username,
       });
     }
 
     const memberUser = loadUserWithRoles(userId);
     const sessionToken = signSessionToken(userId);
-    setSessionCookie(res, sessionToken);
+    setSessionCookie(res, sessionToken, req);
 
-    console.log(`[PI TESTNET AUTH] verified @${piUser.username} (${piUser.uid})`);
+    console.log(`[PI APPSTUDIO AUTH] verified @${piUser.username} (${piUser.uid})`);
 
     return res.json({
       success: true,
       ok: true,
+      sessionToken,
       piUser: {
         uid: piUser.uid,
         username: piUser.username,
-        walletAddress: walletAddress || undefined,
       },
       user: memberUser,
     });
   } catch (err) {
+    if (err instanceof AppStudioAuthError) {
+      recordSecurityEvent(
+        'pi_auth_rejected',
+        'warning',
+        null,
+        req.ip || '',
+        err.message.slice(0, 180)
+      );
+      return res.status(err.statusCode).json({
+        success: false,
+        ok: false,
+        error: err.message,
+      });
+    }
     return res.status(502).json({
       success: false,
       ok: false,
-      error: `Unable to reach Pi Platform authentication server: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Unable to reach App Studio authentication server: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
 });
@@ -223,8 +209,9 @@ router.post('/auth', async (req, res) => {
 // Single-hop fast Server Approval (< 5 seconds) to prevent Pi Wallet "Payment Expired" timeout
 router.post('/approve', optionalAuth, async (req, res) => {
   const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId.trim() : '';
-  const username = typeof req.body?.username === 'string' ? req.body.username.trim().slice(0, 80) : '';
-  const piUid = typeof req.body?.piUid === 'string' ? req.body.piUid.trim().slice(0, 120) : '';
+  // Never trust browser-supplied username or piUid; use verified session identity only
+  const verifiedUsername = req.authUser?.pi_username || '';
+  const verifiedPiUid = req.authUser?.pi_uid || '';
 
   if (!paymentId) {
     return res.status(400).json({ success: false, ok: false, error: 'paymentId is required for server approval.' });
@@ -248,7 +235,6 @@ router.post('/approve', optionalAuth, async (req, res) => {
 
   const startedAt = Date.now();
   try {
-    // Call POST /v2/payments/{paymentId}/approve immediately in one hop for sub-5s approval
     const approveRes = await fetchWithTimeout(
       `${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/approve`,
       {
@@ -269,7 +255,9 @@ router.post('/approve', optionalAuth, async (req, res) => {
     const elapsedMs = Date.now() - startedAt;
 
     if (!approveRes.ok) {
-      console.error(`[PI TESTNET APPROVE FAIL] paymentId=${paymentId} status=${approveRes.status} ms=${elapsedMs} body=${rawText.slice(0, 300)}`);
+      console.error(
+        `[PI TESTNET APPROVE FAIL] paymentId=${paymentId} status=${approveRes.status} ms=${elapsedMs} body=${rawText.slice(0, 300)}`
+      );
       db.prepare(`
         INSERT INTO pi_testnet_payments (payment_id, username, pi_uid, user_id, amount_pi, memo, metadata_json, status, error_message)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'failed', ?)
@@ -279,8 +267,8 @@ router.post('/approve', optionalAuth, async (req, res) => {
           updated_at = datetime('now')
       `).run(
         paymentId,
-        username,
-        piUid,
+        verifiedUsername,
+        verifiedPiUid,
         req.authUser?.id ?? null,
         TESTNET_AMOUNT_PI,
         'IFIOK-EN Testnet Test',
@@ -306,7 +294,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
       return res.status(validation.statusCode).json({ success: false, ok: false, error: validation.error });
     }
 
-    const resolvedUid = piUid || approvedJson.user_uid || '';
+    const resolvedUid = verifiedPiUid || approvedJson.user_uid || '';
 
     db.prepare(`
       INSERT INTO pi_testnet_payments (
@@ -321,7 +309,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
         updated_at = datetime('now')
     `).run(
       paymentId,
-      username,
+      verifiedUsername,
       resolvedUid,
       req.authUser?.id ?? null,
       TESTNET_AMOUNT_PI,
@@ -332,14 +320,14 @@ router.post('/approve', optionalAuth, async (req, res) => {
 
     recordAudit(req.authUser?.id ?? null, 'pi_testnet_approved', 'pi_testnet_payment', paymentId, req.ip || '', {
       paymentId,
-      username,
+      username: verifiedUsername,
       amount: TESTNET_AMOUNT_PI,
       elapsedMs,
       environment: 'testnet',
     });
 
     console.log(
-      `[PI TESTNET APPROVE OK] paymentId=${paymentId} username=${username || 'pi-user'} amount=${TESTNET_AMOUNT_PI} elapsedMs=${elapsedMs}`
+      `[PI TESTNET APPROVE OK] paymentId=${paymentId} username=${verifiedUsername || 'pi-user'} amount=${TESTNET_AMOUNT_PI} elapsedMs=${elapsedMs}`
     );
 
     return res.json({
@@ -348,7 +336,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
       approved: true,
       paymentId,
       amount: TESTNET_AMOUNT_PI,
-      username,
+      username: verifiedUsername,
       status: 'approved',
       environment: 'testnet',
       elapsedMs,
@@ -367,8 +355,8 @@ router.post('/approve', optionalAuth, async (req, res) => {
 router.post('/complete', optionalAuth, async (req, res) => {
   const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId.trim() : '';
   const txid = typeof req.body?.txid === 'string' ? req.body.txid.trim() : '';
-  const username = typeof req.body?.username === 'string' ? req.body.username.trim().slice(0, 80) : '';
-  const piUid = typeof req.body?.piUid === 'string' ? req.body.piUid.trim().slice(0, 120) : '';
+  const verifiedUsername = req.authUser?.pi_username || '';
+  const verifiedPiUid = req.authUser?.pi_uid || '';
 
   if (!paymentId || !txid) {
     return res.status(400).json({
@@ -464,8 +452,8 @@ router.post('/complete', optionalAuth, async (req, res) => {
       `).run(
         paymentId,
         txid,
-        username,
-        piUid || piPayment.user_uid || '',
+        verifiedUsername,
+        verifiedPiUid || piPayment.user_uid || '',
         req.authUser?.id ?? null,
         TESTNET_AMOUNT_PI,
         errText.slice(0, 400)
@@ -490,11 +478,14 @@ router.post('/complete', optionalAuth, async (req, res) => {
       });
     }
 
-    const resolvedUid = piUid || completedJson.user_uid || piPayment.user_uid || '';
+    const resolvedUid = verifiedPiUid || completedJson.user_uid || piPayment.user_uid || '';
     const existingRow = db.prepare(`SELECT username FROM pi_testnet_payments WHERE payment_id = ?`).get(paymentId) as
       | { username: string }
       | undefined;
-    const finalUsername = username || existingRow?.username || '';
+    const dbUserByUid = resolvedUid
+      ? (db.prepare(`SELECT pi_username FROM users WHERE pi_uid = ?`).get(resolvedUid) as { pi_username: string } | undefined)
+      : undefined;
+    const finalUsername = verifiedUsername || existingRow?.username || dbUserByUid?.pi_username || '';
     const elapsedMs = Date.now() - startedAt;
 
     db.prepare(`
@@ -558,7 +549,7 @@ router.post('/complete', optionalAuth, async (req, res) => {
 
 router.post('/cancel', optionalAuth, async (req, res) => {
   const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId.trim() : '';
-  const username = typeof req.body?.username === 'string' ? req.body.username.trim().slice(0, 80) : '';
+  const verifiedUsername = req.authUser?.pi_username || '';
   const attemptServerCancel = Boolean(req.body?.attemptServerCancel);
 
   if (!paymentId) {
@@ -583,7 +574,7 @@ router.post('/cancel', optionalAuth, async (req, res) => {
     ON CONFLICT(payment_id) DO UPDATE SET
       status = CASE WHEN pi_testnet_payments.status = 'completed' THEN 'completed' ELSE 'cancelled' END,
       updated_at = datetime('now')
-  `).run(paymentId, username, req.authUser?.id ?? null, TESTNET_AMOUNT_PI);
+  `).run(paymentId, verifiedUsername, req.authUser?.id ?? null, TESTNET_AMOUNT_PI);
 
   return res.json({ success: true, ok: true, cancelled: true, paymentId });
 });
@@ -593,25 +584,18 @@ router.get('/payments', optionalAuth, async (req, res) => {
   const isRoleAdmin = Boolean(req.authUser?.roles.some((r) => ['super_admin', 'finance_admin'].includes(r)));
   let authorized = sessionUsername === 'ifiok1967' || isRoleAdmin;
 
-  // Also support direct Pi Platform Bearer/header token verification for stateless clients
+  // Stateless fallback: exchange raw Pi accessToken ONLY via App Studio /pi/auth/v1/login
   if (!authorized) {
     const headerToken =
       typeof req.headers['x-pi-access-token'] === 'string' ? req.headers['x-pi-access-token'].trim() : '';
     if (headerToken) {
       try {
-        const meRes = await fetchWithTimeout(
-          `${PI_API_BASE}/me`,
-          { headers: { Authorization: `Bearer ${headerToken}` } },
-          4000
-        );
-        if (meRes.ok) {
-          const piUser = (await meRes.json()) as { username?: string };
-          if ((piUser.username || '').replace(/^@/, '').toLowerCase() === 'ifiok1967') {
-            authorized = true;
-          }
+        const appStudio = await exchangePiTokenWithAppStudio(headerToken, 4000);
+        if ((appStudio.user.username || '').replace(/^@/, '').toLowerCase() === 'ifiok1967') {
+          authorized = true;
         }
       } catch {
-        // Ignore network failure and keep unauthorized
+        // Ignore network/token failure and keep unauthorized
       }
     }
   }

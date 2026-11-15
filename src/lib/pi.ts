@@ -20,19 +20,19 @@ export interface PiIncompletePayment {
 export interface PiAuthSession {
   username: string;
   uid: string;
-  walletAddress?: string;
   accessToken: string;
+  sessionToken?: string;
   connectedAt: string;
 }
 
 interface PiSDK {
-  init: (config: { version: string; sandbox: boolean }) => void;
+  init: (config: { version: string }) => void | Promise<void>;
   authenticate: (
     scopes: string[],
     onIncompletePaymentFound: (payment: PiIncompletePayment) => void
   ) => Promise<{
     accessToken: string;
-    user: { uid: string; username: string; wallet_address?: string };
+    user?: { uid?: string; username?: string };
   }>;
   createPayment: (
     paymentData: { amount: number; memo: string; metadata: Record<string, unknown> },
@@ -55,7 +55,9 @@ const PI_AUTH_STORAGE_KEY = 'ifiok_pi_auth';
 export const PI_AUTH_EVENT = 'ifiok-pi-auth-changed';
 
 let initialized = false;
+let initPromise: Promise<boolean> | null = null;
 let runtimePiAuth: PiAuthSession | null = null;
+let paymentScopeAuthorized = false;
 
 function notifyPiAuthChanged(session: PiAuthSession | null) {
   if (typeof window !== 'undefined') {
@@ -73,8 +75,8 @@ export function getStoredPiAuth(): PiAuthSession | null {
     return {
       username: parsed.username,
       uid: parsed.uid,
-      walletAddress: parsed.walletAddress,
       accessToken: parsed.accessToken,
+      sessionToken: parsed.sessionToken,
       connectedAt: parsed.connectedAt || new Date().toISOString(),
     };
   } catch {
@@ -85,6 +87,9 @@ export function getStoredPiAuth(): PiAuthSession | null {
 export function saveStoredPiAuth(session: PiAuthSession | null) {
   if (typeof window === 'undefined') return;
   runtimePiAuth = session;
+  if (!session) {
+    paymentScopeAuthorized = false;
+  }
   if (session) {
     window.localStorage.setItem(PI_AUTH_STORAGE_KEY, JSON.stringify(session));
   } else {
@@ -97,23 +102,25 @@ export function isPiSdkAvailable(): boolean {
   return typeof window !== 'undefined' && Boolean(window.Pi);
 }
 
-export function initPiTestnet(force = false): boolean {
+export async function initPiTestnet(force = false): Promise<boolean> {
   if (!isPiSdkAvailable()) return false;
   if (!initialized || force) {
-    // Strictly Testnet (sandbox: true) — NEVER Mainnet
-    window.Pi!.init({ version: '2.0', sandbox: true });
-    initialized = true;
+    initPromise = (async () => {
+      await window.Pi!.init({ version: '2.0' });
+      initialized = true;
+      return true;
+    })();
   }
-  return true;
+  return initPromise ? initPromise : Promise.resolve(initialized);
 }
 
 export async function waitForPiSdk(timeoutMs = 5000): Promise<boolean> {
-  if (isPiSdkAvailable()) return initPiTestnet(true);
+  if (isPiSdkAvailable()) return initPiTestnet(false);
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     await new Promise((r) => setTimeout(r, 120));
     if (isPiSdkAvailable()) {
-      return initPiTestnet(true);
+      return initPiTestnet(false);
     }
   }
   return false;
@@ -172,53 +179,55 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
   }
 }
 
-export async function connectWithPi(): Promise<PiAuthSession> {
+export async function connectWithPi(scopes: string[] = ['username']): Promise<PiAuthSession> {
   const ready = await waitForPiSdk(5000);
   if (!ready || !window.Pi) {
     throw new Error(
-      'Pi Browser runtime not detected. Open https://ifiok-en.vercel.app inside Pi Browser (Testnet) and tap Connect with Pi.'
+      'Pi Browser runtime not detected. Open https://ifiok-en.vercel.app inside Pi Browser and tap Connect with Pi.'
     );
   }
 
-  window.Pi.init({ version: '2.0', sandbox: true });
+  // Await Pi.init({ version: "2.0" }) fully before calling Pi.authenticate(...)
+  await window.Pi.init({ version: '2.0' });
   initialized = true;
 
-  const auth = await window.Pi.authenticate(
-    ['username', 'payments', 'wallet_address'],
-    handleIncompletePaymentFound
-  );
-
-  if (!auth?.accessToken || !auth?.user?.username || !auth?.user?.uid) {
-    throw new Error('Pi Network authentication did not return a verified KYC username and token.');
+  const auth = await window.Pi.authenticate(scopes, handleIncompletePaymentFound);
+  if (scopes.includes('payments')) {
+    paymentScopeAuthorized = true;
   }
 
-  // Send accessToken to backend so server verifies identity via api.minepi.com/v2/me
+  // Keep only the accessToken; ignore browser-supplied uid and username
+  const accessToken = auth?.accessToken;
+  if (!accessToken) {
+    throw new Error('Pi Network authentication did not return a valid accessToken.');
+  }
+
+  // Exchange accessToken server-side via App Studio (/pi/auth/v1/login)
   const verifyRes = await fetch('/api/pi/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({
-      accessToken: auth.accessToken,
-      walletAddress: auth.user.wallet_address,
-    }),
+    body: JSON.stringify({ accessToken }),
   });
 
   const verifyData = (await verifyRes.json().catch(() => ({}))) as {
     success?: boolean;
     ok?: boolean;
     error?: string;
-    piUser?: { uid: string; username: string; walletAddress?: string };
+    sessionToken?: string;
+    piUser?: { uid: string; username: string };
   };
 
-  if (!verifyRes.ok || (!verifyData.success && !verifyData.ok)) {
-    throw new Error(verifyData.error || 'Server could not verify Pi Network authentication token.');
+  if (!verifyRes.ok || (!verifyData.success && !verifyData.ok) || !verifyData.piUser?.uid || !verifyData.piUser?.username) {
+    throw new Error(verifyData.error || 'Server could not verify Pi Network authentication token with App Studio.');
   }
 
+  // Store ONLY the App Studio-verified uid and username returned by the backend
   const session: PiAuthSession = {
-    username: verifyData.piUser?.username || auth.user.username,
-    uid: verifyData.piUser?.uid || auth.user.uid,
-    walletAddress: verifyData.piUser?.walletAddress || auth.user.wallet_address,
-    accessToken: auth.accessToken,
+    username: verifyData.piUser.username,
+    uid: verifyData.piUser.uid,
+    accessToken,
+    sessionToken: verifyData.sessionToken,
     connectedAt: new Date().toISOString(),
   };
 
@@ -232,7 +241,7 @@ export async function logoutPi(): Promise<void> {
 }
 
 export async function authenticateWithPi() {
-  const session = await connectWithPi();
+  const session = await connectWithPi(['username']);
   return apiRequest<{ user: unknown }>('/api/auth/pi', {
     method: 'POST',
     body: JSON.stringify({ accessToken: session.accessToken }),
@@ -259,26 +268,28 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
   const sdkReady = await waitForPiSdk(5000);
   if (!sdkReady || !window.Pi) {
     throw new Error(
-      'Pi SDK requires Pi Browser. Open https://ifiok-en.vercel.app inside Pi Browser (Testnet) to complete the 0.01 Pi test.'
+      'Pi SDK requires Pi Browser. Open https://ifiok-en.vercel.app inside Pi Browser to complete the 0.01 Pi test.'
     );
   }
 
-  window.Pi.init({ version: '2.0', sandbox: true });
+  await window.Pi.init({ version: '2.0' });
   initialized = true;
 
-  // Step 1: FIRST authenticate with Pi (grants username, payments, wallet_address scopes in this runtime)
+  // Ensure server-verified Pi authentication with payments scope is active in current runtime
   let session = runtimePiAuth;
-  if (!session) {
+  if (!session || !paymentScopeAuthorized) {
     onStatusUpdate?.('Authenticating with Pi...');
-    session = await connectWithPi();
+    session = await connectWithPi(['username', 'payments']);
   }
 
-  const resolvedUsername = session.username;
-  const resolvedPiUid = session.uid;
+  const verifiedUsername = session.username;
+  const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (session.sessionToken) {
+    authHeaders.Authorization = `Bearer ${session.sessionToken}`;
+  }
 
   onStatusUpdate?.('Processing Testnet Payment...');
 
-  // Step 2: THEN call Pi.createPayment with fast <5s server approval + completion
   return new Promise<TestnetPaymentSuccess>((resolve, reject) => {
     let settled = false;
     const safeReject = (err: Error) => {
@@ -307,13 +318,9 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
             try {
               const res = await fetch('/api/pi/approve', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: authHeaders,
                 credentials: 'include',
-                body: JSON.stringify({
-                  paymentId,
-                  username: resolvedUsername,
-                  piUid: resolvedPiUid,
-                }),
+                body: JSON.stringify({ paymentId }),
               });
               const data = (await res.json().catch(() => ({}))) as {
                 success?: boolean;
@@ -332,14 +339,9 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
             try {
               const res = await fetch('/api/pi/complete', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: authHeaders,
                 credentials: 'include',
-                body: JSON.stringify({
-                  paymentId,
-                  txid,
-                  username: resolvedUsername,
-                  piUid: resolvedPiUid,
-                }),
+                body: JSON.stringify({ paymentId, txid }),
               });
               const data = (await res.json().catch(() => ({}))) as {
                 success?: boolean;
@@ -357,7 +359,7 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
               safeResolve({
                 paymentId: data.paymentId || paymentId,
                 txid: data.txid || txid,
-                username: data.username || resolvedUsername,
+                username: data.username || verifiedUsername,
                 amount: data.amount ?? 0.01,
               });
             } catch (err) {
@@ -367,9 +369,9 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
           onCancel: (paymentId: string) => {
             fetch('/api/pi/cancel', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: authHeaders,
               credentials: 'include',
-              body: JSON.stringify({ paymentId, username: resolvedUsername }),
+              body: JSON.stringify({ paymentId }),
             }).catch(() => undefined);
             safeReject(new PiPaymentCancelledError(paymentId, 'Cancelled'));
           },
@@ -440,8 +442,8 @@ export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise
     );
   }
 
-  if (!runtimePiAuth) {
-    await connectWithPi();
+  if (!runtimePiAuth || !paymentScopeAuthorized) {
+    await connectWithPi(['username', 'payments']);
   }
 
   return new Promise<PaymentFlowResult>((resolve, reject) => {

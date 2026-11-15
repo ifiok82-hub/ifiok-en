@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const PI_API_BASE = 'https://api.minepi.com/v2';
+const APP_STUDIO_LOGIN_URL =
+  'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com/pi/auth/v1/login';
 
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown) {
   res.statusCode = statusCode;
@@ -20,17 +21,19 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4500);
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const meRes = await fetch(`${PI_API_BASE}/me`, {
-      headers: { Authorization: `Bearer ${headerToken}` },
+    const appStudioRes = await fetch(APP_STUDIO_LOGIN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessToken: headerToken }),
       signal: controller.signal,
     });
-    if (!meRes.ok) {
+    if (!appStudioRes.ok) {
       return sendJson(res, 403, { success: false, ok: false, error: 'Access Denied - Admin Only' });
     }
-    const piUser = (await meRes.json()) as { username?: string };
-    if ((piUser.username || '').replace(/^@/, '').toLowerCase() !== 'ifiok1967') {
+    const data = (await appStudioRes.json()) as { user?: { username?: string } };
+    if ((data?.user?.username || '').replace(/^@/, '').toLowerCase() !== 'ifiok1967') {
       return sendJson(res, 403, { success: false, ok: false, error: 'Access Denied - Admin Only' });
     }
 

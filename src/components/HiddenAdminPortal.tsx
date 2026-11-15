@@ -56,11 +56,15 @@ export function HiddenAdminPortal({
     if (!piAuth || !isAuthorizedPiAdmin(piAuth)) return;
     setLoadingPayments(true);
     try {
+      const headers: Record<string, string> = {
+        'x-pi-access-token': piAuth.accessToken,
+      };
+      if (piAuth.sessionToken) {
+        headers.Authorization = `Bearer ${piAuth.sessionToken}`;
+      }
       const res = await fetch('/api/pi/payments', {
         credentials: 'include',
-        headers: {
-          'x-pi-access-token': piAuth.accessToken,
-        },
+        headers,
       });
       if (res.ok) {
         const data = (await res.json()) as { payments?: PiTestnetPaymentRow[] };

@@ -27,9 +27,24 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.set('trust proxy', 1);
 
+const isProd = process.env.NODE_ENV === 'production';
+
 app.use(
   helmet({
-    contentSecurityPolicy: false,
+    xFrameOptions: false,
+    contentSecurityPolicy: isProd
+      ? {
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", 'https://sdk.minepi.com'],
+            styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+            fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+            imgSrc: ["'self'", 'data:', 'https:'],
+            connectSrc: ["'self'", 'https://socialchain.app'],
+            frameAncestors: ["'self'", 'https://*.pinet.com', 'https://*.minepi.com'],
+          },
+        }
+      : false,
     crossOriginEmbedderPolicy: false,
   })
 );

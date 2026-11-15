@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { db } from '../db.ts';
+import { AppStudioAuthError, exchangePiTokenWithAppStudio } from '../lib/piAppStudioAuth.ts';
 import {
   buildOtpAuthUri,
   decryptSensitive,
@@ -298,19 +299,11 @@ router.post('/pi', async (req, res) => {
   }
 
   try {
-    const piRes = await fetch('https://api.minepi.com/v2/me', {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!piRes.ok) {
-      recordSecurityEvent('pi_auth_rejected', 'warning', null, req.ip || '', `Pi Platform API rejected accessToken (${piRes.status})`);
-      return res.status(401).json({ error: 'Pi Network token verification failed with api.minepi.com.' });
-    }
-    const piUser = (await piRes.json()) as { uid?: string; username?: string };
-    if (!piUser.uid || !piUser.username) {
-      return res.status(401).json({ error: 'Invalid Pi Network user payload.' });
-    }
+    // Exchange accessToken with App Studio; ignore any browser-supplied uid or username
+    const appStudio = await exchangePiTokenWithAppStudio(accessToken);
+    const piUser = appStudio.user;
 
-    let existing = db.prepare(`SELECT id, status FROM users WHERE pi_uid = ?`).get(piUser.uid) as
+    const existing = db.prepare(`SELECT id, status FROM users WHERE pi_uid = ?`).get(piUser.uid) as
       | { id: number; status: string }
       | undefined;
 
@@ -331,7 +324,7 @@ router.post('/pi', async (req, res) => {
           id,
           'welcome',
           'Pi Account Connected',
-          `Verified Pi Network username @${piUser.username} connected on Testnet.`,
+          `Verified Pi Network username @${piUser.username} connected.`,
           'profile'
         );
         recordAudit(id, 'user_registered_pi', 'user', id, req.ip || '', { pi_username: piUser.username });
@@ -348,11 +341,15 @@ router.post('/pi', async (req, res) => {
 
     const user = loadUserWithRoles(userId);
     const token = signSessionToken(userId);
-    setSessionCookie(res, token);
-    return res.json({ user });
+    setSessionCookie(res, token, req);
+    return res.json({ user, sessionToken: token });
   } catch (err) {
+    if (err instanceof AppStudioAuthError) {
+      recordSecurityEvent('pi_auth_rejected', 'warning', null, req.ip || '', err.message.slice(0, 180));
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     recordSecurityEvent('pi_auth_error', 'warning', null, req.ip || '', String(err));
-    return res.status(502).json({ error: 'Unable to reach Pi Network verification servers.' });
+    return res.status(502).json({ error: 'Unable to reach App Studio Pi authentication server.' });
   }
 });
 

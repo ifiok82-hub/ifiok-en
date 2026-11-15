@@ -354,7 +354,7 @@ router.post('/pi', async (req, res) => {
 });
 
 router.post('/logout', (req, res) => {
-  clearSessionCookie(res);
+  clearSessionCookie(res, req);
   res.json({ ok: true });
 });
 

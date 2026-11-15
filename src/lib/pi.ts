@@ -23,6 +23,7 @@ export interface PiAuthSession {
   uid: string;
   accessToken: string;
   sessionToken?: string;
+  user?: unknown;
   connectedAt: string;
 }
 
@@ -194,7 +195,7 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
 }
 
 export async function connectWithPi(
-  scopes: string[] = ['username', 'payments', 'wallet_address']
+  scopes: string[] = ['username']
 ): Promise<PiAuthSession> {
   const ready = await waitForPiSdk(5000);
   if (!ready || !window.Pi) {
@@ -232,6 +233,7 @@ export async function connectWithPi(
     error?: string;
     sessionToken?: string;
     piUser?: { uid: string; username: string };
+    user?: unknown;
   };
 
   if (!verifyRes.ok || (!verifyData.success && !verifyData.ok) || !verifyData.piUser?.uid || !verifyData.piUser?.username) {
@@ -244,6 +246,7 @@ export async function connectWithPi(
     uid: verifyData.piUser.uid,
     accessToken,
     sessionToken: verifyData.sessionToken,
+    user: verifyData.user,
     connectedAt: new Date().toISOString(),
   };
 
@@ -259,10 +262,10 @@ export async function logoutPi(): Promise<void> {
 
 export async function authenticateWithPi() {
   const session = await connectWithPi(['username']);
-  return apiRequest<{ user: unknown }>('/api/auth/pi', {
-    method: 'POST',
-    body: JSON.stringify({ accessToken: session.accessToken }),
-  });
+  if (session.user) {
+    return { user: session.user };
+  }
+  return apiRequest<{ user: unknown }>('/api/auth/me');
 }
 
 export interface TestnetPaymentSuccess {

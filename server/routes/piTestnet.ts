@@ -176,8 +176,6 @@ router.post('/auth', async (req, res) => {
     return res.json({
       success: true,
       ok: true,
-      username: piUser.username,
-      uid: piUser.uid,
       sessionToken,
       piUser: {
         uid: piUser.uid,

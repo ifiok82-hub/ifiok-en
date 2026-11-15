@@ -66,18 +66,8 @@ export function setSessionCookie(res: Response, token: string, req?: Request) {
   });
 }
 
-export function clearSessionCookie(res: Response, req?: Request) {
-  const isHttps =
-    process.env.NODE_ENV === 'production' ||
-    Boolean(req?.secure) ||
-    req?.headers['x-forwarded-proto'] === 'https';
-
-  res.clearCookie(COOKIE_NAME, {
-    httpOnly: true,
-    sameSite: isHttps ? 'none' : 'lax',
-    secure: isHttps,
-    path: '/',
-  });
+export function clearSessionCookie(res: Response) {
+  res.clearCookie(COOKIE_NAME, { path: '/' });
 }
 
 export function loadUserWithRoles(userId: number): AuthUser | null {

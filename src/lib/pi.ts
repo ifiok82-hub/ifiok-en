@@ -1,5 +1,4 @@
 import { apiRequest } from './api.ts';
-import { broadcastTokenToAppStudioWithRetries } from './appStudio.ts';
 
 export interface PiIncompletePayment {
   identifier?: string;
@@ -23,7 +22,6 @@ export interface PiAuthSession {
   uid: string;
   accessToken: string;
   sessionToken?: string;
-  user?: unknown;
   connectedAt: string;
 }
 
@@ -53,8 +51,7 @@ declare global {
   }
 }
 
-const PI_AUTH_STORAGE_KEY = 'pi_auth';
-const LEGACY_PI_AUTH_STORAGE_KEY = 'ifiok_pi_auth';
+const PI_AUTH_STORAGE_KEY = 'ifiok_pi_auth';
 export const PI_AUTH_EVENT = 'ifiok-pi-auth-changed';
 
 let initialized = false;
@@ -71,9 +68,7 @@ function notifyPiAuthChanged(session: PiAuthSession | null) {
 export function getStoredPiAuth(): PiAuthSession | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw =
-      window.localStorage.getItem(PI_AUTH_STORAGE_KEY) ||
-      window.localStorage.getItem(LEGACY_PI_AUTH_STORAGE_KEY);
+    const raw = window.localStorage.getItem(PI_AUTH_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PiAuthSession>;
     if (!parsed.username || !parsed.uid || !parsed.accessToken) return null;
@@ -96,19 +91,9 @@ export function saveStoredPiAuth(session: PiAuthSession | null) {
     paymentScopeAuthorized = false;
   }
   if (session) {
-    const serialized = JSON.stringify(session);
-    window.localStorage.setItem(PI_AUTH_STORAGE_KEY, serialized);
-    window.localStorage.setItem(LEGACY_PI_AUTH_STORAGE_KEY, serialized);
-    window.localStorage.setItem('pi_access_token', session.accessToken);
-    window.localStorage.setItem(
-      'pi_user',
-      JSON.stringify({ uid: session.uid, username: session.username })
-    );
+    window.localStorage.setItem(PI_AUTH_STORAGE_KEY, JSON.stringify(session));
   } else {
     window.localStorage.removeItem(PI_AUTH_STORAGE_KEY);
-    window.localStorage.removeItem(LEGACY_PI_AUTH_STORAGE_KEY);
-    window.localStorage.removeItem('pi_access_token');
-    window.localStorage.removeItem('pi_user');
   }
   notifyPiAuthChanged(session);
 }
@@ -194,9 +179,7 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
   }
 }
 
-export async function connectWithPi(
-  scopes: string[] = ['username']
-): Promise<PiAuthSession> {
+export async function connectWithPi(scopes: string[] = ['username']): Promise<PiAuthSession> {
   const ready = await waitForPiSdk(5000);
   if (!ready || !window.Pi) {
     throw new Error(
@@ -233,7 +216,6 @@ export async function connectWithPi(
     error?: string;
     sessionToken?: string;
     piUser?: { uid: string; username: string };
-    user?: unknown;
   };
 
   if (!verifyRes.ok || (!verifyData.success && !verifyData.ok) || !verifyData.piUser?.uid || !verifyData.piUser?.username) {
@@ -246,12 +228,10 @@ export async function connectWithPi(
     uid: verifyData.piUser.uid,
     accessToken,
     sessionToken: verifyData.sessionToken,
-    user: verifyData.user,
     connectedAt: new Date().toISOString(),
   };
 
   saveStoredPiAuth(session);
-  broadcastTokenToAppStudioWithRetries(accessToken, verifyData.piUser);
   return session;
 }
 
@@ -262,10 +242,10 @@ export async function logoutPi(): Promise<void> {
 
 export async function authenticateWithPi() {
   const session = await connectWithPi(['username']);
-  if (session.user) {
-    return { user: session.user };
-  }
-  return apiRequest<{ user: unknown }>('/api/auth/me');
+  return apiRequest<{ user: unknown }>('/api/auth/pi', {
+    method: 'POST',
+    body: JSON.stringify({ accessToken: session.accessToken }),
+  });
 }
 
 export interface TestnetPaymentSuccess {

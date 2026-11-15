@@ -32,9 +32,6 @@ const isProd = process.env.NODE_ENV === 'production';
 app.use(
   helmet({
     xFrameOptions: false,
-    crossOriginOpenerPolicy: false,
-    crossOriginResourcePolicy: false,
-    crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: isProd
       ? {
           directives: {
@@ -43,12 +40,12 @@ app.use(
             styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
             fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
             imgSrc: ["'self'", 'data:', 'https:'],
-            connectSrc: ["'self'", 'https://socialchain.app', 'https://*.minepi.com', 'https://*.pinet.com'],
-            frameSrc: ["'self'", 'https://socialchain.app', 'https://*.minepi.com', 'https://*.pinet.com'],
-            frameAncestors: null,
+            connectSrc: ["'self'", 'https://socialchain.app'],
+            frameAncestors: ["'self'", 'https://*.pinet.com', 'https://*.minepi.com'],
           },
         }
       : false,
+    crossOriginEmbedderPolicy: false,
   })
 );
 app.use(express.json({ limit: '4mb' }));

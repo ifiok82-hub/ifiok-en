@@ -5,36 +5,45 @@ import {
   Building2,
   CheckCircle2,
   Flag,
+  Lock,
   MessageSquare,
   Plus,
   Search,
+  ShieldCheck,
   ShoppingBag,
   ShoppingCart,
   Trash2,
+  Unlock,
   Users,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api.ts';
-import { COUNTRIES, formatPiPrice } from '../lib/i18n.ts';
+import { ACADEMIC_SUBJECTS, COUNTRIES, formatPiPrice, LANGUAGE_OPTIONS } from '../lib/i18n.ts';
 import { startPiPaymentFlow } from '../lib/pi.ts';
 import type {
+  AcademySubView,
   BusinessProfile,
   CommunityPost,
   Course,
   CurrencyCode,
   DivisionTab,
   FreelanceService,
+  LanguageCode,
   Opportunity,
   Product,
   UserProfile,
 } from '../types/platform.ts';
+import { GlobalAcademyHub } from './GlobalAcademyHub.tsx';
 
 interface DivisionsViewProps {
   activeTab: DivisionTab;
   onChangeTab: (tab: DivisionTab) => void;
   onBackHome: () => void;
   user: UserProfile | null;
+  language: LanguageCode;
+  onChangeLanguage: (lang: LanguageCode) => void;
+  initialAcademySubView?: AcademySubView;
   currency: CurrencyCode;
   usdRate: number;
   onRequireAuth: () => void;
@@ -59,6 +68,9 @@ export function DivisionsView({
   onChangeTab,
   onBackHome,
   user,
+  language,
+  onChangeLanguage,
+  initialAcademySubView = 'courses',
   currency,
   usdRate,
   onRequireAuth,
@@ -68,6 +80,7 @@ export function DivisionsView({
   const [bannerMsg, setBannerMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterValue, setFilterValue] = useState('All');
+  const [courseLangFilter, setCourseLangFilter] = useState('all');
 
   // Data collections
   const [courses, setCourses] = useState<Course[]>([]);
@@ -88,13 +101,12 @@ export function DivisionsView({
   const [hireService, setHireService] = useState<FreelanceService | null>(null);
   const [messageMember, setMessageMember] = useState<PublicMember | null>(null);
 
-  // Certificate verification
-  const [certCode, setCertCode] = useState('');
-  const [certResult, setCertResult] = useState<Record<string, unknown> | null>(null);
-
   // Creation form states
   const [fTitle, setFTitle] = useState('');
   const [fCategory, setFCategory] = useState('Digital Skills');
+  const [fSubject, setFSubject] = useState<string>(ACADEMIC_SUBJECTS[0]);
+  const [fCourseLang, setFCourseLang] = useState<LanguageCode>('en');
+  const [fIssuingOrg, setFIssuingOrg] = useState('IFIOK SCHOOL');
   const [fDescription, setFDescription] = useState('');
   const [fExtra1, setFExtra1] = useState('');
   const [fExtra2, setFExtra2] = useState('');
@@ -102,6 +114,12 @@ export function DivisionsView({
   const [fNum1, setFNum1] = useState('10');
   const [fNum2, setFNum2] = useState('7');
   const [fBool, setFBool] = useState(true);
+  const [fImageUrl, setFImageUrl] = useState('');
+  const [fSourceOrigin, setFSourceOrigin] = useState('');
+  const [fSourceUrl, setFSourceUrl] = useState('');
+  const [fLockedContent, setFLockedContent] = useState('');
+  const [uploadingImg, setUploadingImg] = useState(false);
+  const [unlockedPreview, setUnlockedPreview] = useState<{ title: string; content: string; unlockedAt: string } | null>(null);
   const [subMode, setSubMode] = useState<'primary' | 'onboarding'>('primary');
 
   // Action modal fields
@@ -113,7 +131,7 @@ export function DivisionsView({
     try {
       if (activeTab === 'academy') {
         const res = await apiRequest<{ courses: Course[] }>(
-          `/api/divisions/courses?category=${encodeURIComponent(filterValue)}&q=${encodeURIComponent(searchQuery)}`
+          `/api/divisions/courses?subject=${encodeURIComponent(filterValue)}&language=${encodeURIComponent(courseLangFilter)}&q=${encodeURIComponent(searchQuery)}`
         );
         setCourses(res.courses);
       } else if (activeTab === 'business') {
@@ -148,7 +166,7 @@ export function DivisionsView({
     } finally {
       setLoading(false);
     }
-  }, [activeTab, filterValue, searchQuery]);
+  }, [activeTab, filterValue, courseLangFilter, searchQuery]);
 
   useEffect(() => {
     loadTab();
@@ -156,6 +174,7 @@ export function DivisionsView({
 
   useEffect(() => {
     setFilterValue('All');
+    setCourseLangFilter('all');
     setSearchQuery('');
     setShowCreateModal(false);
     setSubMode('primary');
@@ -173,6 +192,47 @@ export function DivisionsView({
     setFExtra3('');
     setFNum1('10');
     setFNum2('7');
+    setFImageUrl('');
+    setFSourceOrigin('');
+    setFSourceUrl('');
+    setFLockedContent('');
+  };
+
+  const handleUploadImage = async (file: File) => {
+    setUploadingImg(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read selected file.'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiRequest<{ url: string }>('/api/uploads/image', {
+        method: 'POST',
+        body: JSON.stringify({ dataBase64: base64 }),
+      });
+      setFImageUrl(res.url);
+      notify('ok', 'Image verified and uploaded securely.');
+    } catch (err) {
+      notify('err', err instanceof Error ? err.message : 'Image upload rejected by security scan.');
+    } finally {
+      setUploadingImg(false);
+    }
+  };
+
+  const handleAccessUnlocked = async (itemType: 'product' | 'course', itemId: number) => {
+    if (!user) {
+      onRequireAuth();
+      return;
+    }
+    try {
+      const res = await apiRequest<{ unlocked: boolean; unlockedAt: string; title: string; content: string }>(
+        `/api/payments/entitlements/${itemType}/${itemId}`
+      );
+      setUnlockedPreview({ title: res.title, content: res.content, unlockedAt: res.unlockedAt });
+    } catch (err) {
+      notify('err', err instanceof Error ? err.message : 'Locked until server confirms Pi payment.');
+    }
   };
 
   const handleOpenCreate = (mode: 'primary' | 'onboarding' = 'primary') => {
@@ -182,20 +242,17 @@ export function DivisionsView({
     }
     resetForm();
     setSubMode(mode);
-    setShowCreateModal(true);
-  };
-
-  const handleVerifyCertificate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCertResult(null);
-    try {
-      const res = await apiRequest<{ valid: boolean; certificate: Record<string, unknown> }>(
-        `/api/divisions/certificates/verify/${encodeURIComponent(certCode.trim())}`
-      );
-      setCertResult(res.certificate);
-    } catch (err) {
-      notify('err', err instanceof Error ? err.message : 'Certificate not found.');
+    if (activeTab === 'academy') {
+      setFCategory('Web3 & Blockchain');
+      setFSubject(ACADEMIC_SUBJECTS[0]);
+      setFCourseLang(language);
+      setFIssuingOrg('IFIOK SCHOOL');
     }
+    else if (activeTab === 'market') setFCategory('digital');
+    else if (activeTab === 'freelance') setFCategory('Software Development');
+    else if (activeTab === 'opportunities') setFCategory('job');
+    else if (activeTab === 'community') setFCategory('discussion');
+    setShowCreateModal(true);
   };
 
   const handleEnrolCourse = async (course: Course) => {
@@ -341,11 +398,18 @@ export function DivisionsView({
           body: JSON.stringify({
             title: fTitle,
             category: fCategory,
+            subject: fSubject,
+            languageCode: fCourseLang,
+            issuingOrganization: fIssuingOrg || 'IFIOK SCHOOL',
             level: fExtra2 || 'Beginner',
             durationHours: Number(fNum2) || 6,
             pricePi: Number(fNum1) || 0,
             description: fDescription,
             syllabus: syllabus.length ? syllabus : undefined,
+            imageUrl: fImageUrl,
+            sourceOrigin: fSourceOrigin || 'Authorized Educational Material',
+            sourceUrl: fSourceUrl,
+            lockedMaterials: fLockedContent,
           }),
         });
         notify('ok', `Course created with status: ${res.approvalStatus}.`);
@@ -360,6 +424,8 @@ export function DivisionsView({
             website: fExtra3,
             summary: fDescription,
             servicesOffered: fExtra2 || fCategory,
+            sourceOrigin: fSourceOrigin || 'Verified Business Submission',
+            sourceUrl: fSourceUrl || fExtra3,
           }),
         });
         notify('ok', `Business profile submitted (${res.verificationStatus}).`);
@@ -372,6 +438,7 @@ export function DivisionsView({
             description: fDescription,
             pricePi: Number(fNum1),
             deliveryDays: Number(fNum2),
+            sourceOrigin: fSourceOrigin || 'Verified Freelancer Listing',
           }),
         });
         notify('ok', `Freelance service submitted (${res.approvalStatus}).`);
@@ -388,6 +455,8 @@ export function DivisionsView({
             deadline: fNum1 || '2026-12-31',
             description: fDescription,
             requirements: fDescription,
+            sourceOrigin: fSourceOrigin || 'Issuing Organization Confirmed',
+            sourceUrl: fSourceUrl,
           }),
         });
         notify('ok', `Opportunity submitted for verification (${res.approvalStatus}).`);
@@ -407,10 +476,14 @@ export function DivisionsView({
           body: JSON.stringify({
             title: fTitle,
             productType: fCategory,
-            category: fExtra1 || 'Digital',
+            category: fExtra1 || 'Electronics & Tech',
             description: fDescription,
             pricePi: Number(fNum1),
             stockQty: Number(fNum2) || 1,
+            imageUrl: fImageUrl,
+            sourceOrigin: fSourceOrigin || 'Genuine Seller Submission',
+            sourceUrl: fSourceUrl,
+            lockedContent: fLockedContent,
           }),
         });
         notify('ok', `Marketplace listing submitted (${res.approvalStatus}).`);
@@ -436,7 +509,7 @@ export function DivisionsView({
   };
 
   const tabs: Array<{ id: DivisionTab; label: string; icon: typeof BookOpen }> = [
-    { id: 'academy', label: 'Academy', icon: BookOpen },
+    { id: 'academy', label: 'IFIOK SCHOOL', icon: BookOpen },
     { id: 'business', label: 'Business Hub', icon: Building2 },
     { id: 'freelance', label: 'Freelance', icon: Briefcase },
     { id: 'opportunities', label: 'Opportunities', icon: CheckCircle2 },
@@ -517,7 +590,7 @@ export function DivisionsView({
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={`Search ${activeTab}...`}
+                placeholder={`Search ${activeTab === 'academy' ? 'IFIOK SCHOOL' : activeTab}...`}
                 className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
             </div>
@@ -528,11 +601,12 @@ export function DivisionsView({
                 onChange={(e) => setFilterValue(e.target.value)}
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
               >
-                <option value="All">All Categories</option>
-                <option value="Digital Skills">Digital Skills</option>
-                <option value="Web3 & Blockchain">Web3 & Blockchain</option>
-                <option value="Entrepreneurship">Entrepreneurship</option>
-                <option value="Technology Training">Technology Training</option>
+                <option value="All">All 17 Subjects</option>
+                {ACADEMIC_SUBJECTS.map((subj) => (
+                  <option key={subj} value={subj}>
+                    {subj}
+                  </option>
+                ))}
               </select>
             )}
 
@@ -574,10 +648,10 @@ export function DivisionsView({
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
               >
                 <option value="All">All Product Types</option>
-                <option value="physical">Physical Products</option>
-                <option value="digital">Digital Products</option>
+                <option value="physical">Physical Products (Electronics, Fashion, Home & Office)</option>
+                <option value="digital">Digital Products & Software</option>
                 <option value="service">Digital Services</option>
-                <option value="web3">Web3 Products</option>
+                <option value="web3">Web3 Products & Services</option>
                 <option value="pi_app">Verified Pi Apps</option>
                 <option value="gaming_asset">Blockchain Gaming Assets</option>
               </select>
@@ -633,86 +707,26 @@ export function DivisionsView({
           </div>
         ) : (
           <>
-            {/* ACADEMY */}
+            {/* ACADEMY (Unified Global Academy Hub: 17 Subjects, IFIOK Professor AI, Virtual Classroom, Schools, Certificates) */}
             {activeTab === 'academy' && (
-              <div className="space-y-8">
-                {courses.length === 0 ? (
-                  <EmptyDivisionState
-                    title="No published courses match your filter"
-                    description="IFIOK Academy only lists genuine curricula authored by verified instructors. Apply as an instructor or publish an approved course."
-                    actionLabel="Publish a Course"
-                    onAction={() => handleOpenCreate('primary')}
-                  />
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {courses.map((c) => {
-                      const price = formatPiPrice(c.price_pi, currency, usdRate);
-                      return (
-                        <article
-                          key={c.id}
-                          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 flex flex-col justify-between space-y-5"
-                        >
-                          <div className="space-y-2.5">
-                            <div className="text-xs text-slate-500 dark:text-slate-400">
-                              {c.category} · {c.level} · {c.duration_hours} hrs
-                              {c.approval_status !== 'approved' && ` · ${c.approval_status}`}
-                            </div>
-                            <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">{c.title}</h3>
-                            <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-3">{c.description}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Instructor: {c.instructor_name}</p>
-                          </div>
-                          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
-                            <div>
-                              <div className="font-mono font-bold text-slate-950 dark:text-amber-400">
-                                {c.price_pi === 0 ? 'Free' : price.primary}
-                              </div>
-                              {price.reference && c.price_pi > 0 && (
-                                <div className="text-[11px] font-mono text-slate-500">{price.reference}</div>
-                              )}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleEnrolCourse(c)}
-                              className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer whitespace-nowrap"
-                            >
-                              {c.price_pi === 0 ? 'Enrol Free' : 'Enrol with Pi'}
-                            </button>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Verifiable Certificate Verification Tool */}
-                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4">
-                  <h3 className="font-display font-bold text-slate-950 dark:text-white">
-                    Verify Academy Certificate Record
-                  </h3>
-                  <form onSubmit={handleVerifyCertificate} className="flex flex-wrap gap-3">
-                    <input
-                      type="text"
-                      value={certCode}
-                      onChange={(e) => setCertCode(e.target.value)}
-                      placeholder="Enter Certificate Code (e.g. IFIOK-CERT-...)"
-                      className="flex-1 min-w-[240px] rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3.5 py-2 text-sm font-mono text-slate-900 dark:text-white"
-                    />
-                    <button
-                      type="submit"
-                      className="px-5 py-2 rounded-lg bg-slate-900 dark:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
-                    >
-                      Verify Record
-                    </button>
-                  </form>
-                  {certResult && (
-                    <div className="rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 p-4 text-sm text-emerald-950 dark:text-emerald-200">
-                      Verified Certificate <strong>{String(certResult.certificate_code)}</strong> awarded to{' '}
-                      <strong>{String(certResult.student_name)}</strong> for completing{' '}
-                      <strong>{String(certResult.course_title)}</strong>.
-                    </div>
-                  )}
-                </div>
-              </div>
+              <GlobalAcademyHub
+                user={user}
+                language={language}
+                onChangeLanguage={onChangeLanguage}
+                currency={currency}
+                usdRate={usdRate}
+                courses={courses}
+                subjectFilter={filterValue}
+                onChangeSubjectFilter={setFilterValue}
+                languageFilter={courseLangFilter}
+                onChangeLanguageFilter={setCourseLangFilter}
+                initialSubView={initialAcademySubView}
+                onRequireAuth={onRequireAuth}
+                onEnrolCourse={handleEnrolCourse}
+                onAccessUnlockedCourse={(courseId) => handleAccessUnlocked('course', courseId)}
+                onOpenCreateCourse={() => handleOpenCreate('primary')}
+                onNotify={notify}
+              />
             )}
 
             {/* BUSINESS HUB */}
@@ -733,7 +747,8 @@ export function DivisionsView({
                         className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-3"
                       >
                         <div className="text-xs text-slate-500 dark:text-slate-400">
-                          {b.sector} · {b.country} · Verified SME
+                          {b.sector} · {b.country} · {b.source_origin || 'Verified SME'}
+                          {b.last_verified_at ? ` · Verified ${b.last_verified_at.slice(0, 10)}` : ''}
                         </div>
                         <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
                           {b.business_name}
@@ -794,7 +809,7 @@ export function DivisionsView({
                               }}
                               className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
                             >
-                              Commission Project
+                              PAY WITH PI
                             </button>
                           </div>
                         </article>
@@ -836,6 +851,10 @@ export function DivisionsView({
                           </span>
                         </div>
                         <p className="text-sm text-slate-600 dark:text-slate-300">{o.description}</p>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                          Source: {o.source_origin || 'Issuing Organization Confirmed'}
+                          {o.last_verified_at ? ` · Verified ${o.last_verified_at.slice(0, 10)}` : ''}
+                        </div>
                         <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
                           <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
                             {o.compensation_or_award}
@@ -877,20 +896,53 @@ export function DivisionsView({
                       return (
                         <article
                           key={p.id}
-                          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 flex flex-col justify-between space-y-5"
+                          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-hidden flex flex-col justify-between"
                         >
-                          <div className="space-y-2">
-                            <div className="text-xs text-slate-500 dark:text-slate-400">
-                              {p.product_type.replace('_', ' ')} · {p.category} · Stock {p.stock_qty}
-                              {p.approval_status !== 'approved' && ` · ${p.approval_status}`}
+                          <div>
+                            {p.image_url && (
+                              <div className="h-44 bg-slate-900">
+                                <img
+                                  src={p.image_url}
+                                  alt={p.title}
+                                  referrerPolicy="no-referrer"
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                            )}
+                            <div className="p-6 space-y-2">
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                {p.product_type.replace('_', ' ')} · {p.category} · Stock {p.stock_qty} ·{' '}
+                                {p.availability_status || 'available'}
+                                {p.approval_status !== 'approved' && ` · ${p.approval_status}`}
+                              </div>
+                              <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">{p.title}</h3>
+                              <p className="text-sm text-slate-600 dark:text-slate-300">{p.description}</p>
+                              <div className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5">
+                                <div>
+                                  Seller: {p.store_name} ({p.seller_country})
+                                </div>
+                                <div>
+                                  Origin: {p.source_origin || 'Seller Submission'}
+                                  {p.last_verified_at ? ` · Verified ${p.last_verified_at.slice(0, 10)}` : ''}
+                                </div>
+                              </div>
+                              {p.product_type !== 'physical' && (
+                                <div className="flex items-center justify-between pt-1 text-xs">
+                                  <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
+                                    <Lock className="w-3.5 h-3.5" /> Auto-locked until Pi verified
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAccessUnlocked('product', p.id)}
+                                    className="text-purple-700 dark:text-amber-300 hover:underline font-semibold cursor-pointer"
+                                  >
+                                    Access
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                            <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">{p.title}</h3>
-                            <p className="text-sm text-slate-600 dark:text-slate-300">{p.description}</p>
-                            <p className="text-xs text-slate-500">
-                              Seller: {p.store_name} ({p.seller_country})
-                            </p>
                           </div>
-                          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+                          <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
                             <div>
                               <div className="font-mono font-bold text-slate-950 dark:text-amber-400">{price.primary}</div>
                               {price.reference && <div className="text-[11px] font-mono text-slate-500">{price.reference}</div>}
@@ -901,7 +953,7 @@ export function DivisionsView({
                               onClick={() => addToCart(p)}
                               className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-40"
                             >
-                              {p.stock_qty < 1 ? 'Out of Stock' : 'Add to Cart'}
+                              {p.stock_qty < 1 ? 'Out of Stock' : 'Add to Pi Cart'}
                             </button>
                           </div>
                         </article>
@@ -1001,8 +1053,8 @@ export function DivisionsView({
           <div className="w-full max-w-lg rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-4 my-8">
             <div className="flex items-center justify-between">
               <h3 className="font-display font-bold text-lg text-slate-950 dark:text-white">
-                {activeTab === 'academy' && subMode === 'onboarding' && 'Apply as IFIOK Academy Instructor'}
-                {activeTab === 'academy' && subMode === 'primary' && 'Publish Academy Course'}
+                {activeTab === 'academy' && subMode === 'onboarding' && 'Apply as IFIOK SCHOOL Educator / Instructor'}
+                {activeTab === 'academy' && subMode === 'primary' && 'Publish IFIOK SCHOOL Course'}
                 {activeTab === 'business' && 'Register SME Business Profile'}
                 {activeTab === 'freelance' && 'Publish Freelance Service'}
                 {activeTab === 'opportunities' && 'Submit Verified Opportunity'}
@@ -1053,9 +1105,14 @@ export function DivisionsView({
                         onChange={(e) => setFCategory(e.target.value)}
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                       >
-                        <option value="Digital Skills">Digital Skills</option>
                         <option value="Web3 & Blockchain">Web3 & Blockchain</option>
+                        <option value="Programming & Software">Programming & Software</option>
+                        <option value="Digital Marketing">Digital Marketing</option>
+                        <option value="Graphic Design">Graphic Design</option>
+                        <option value="Business Management">Business Management</option>
                         <option value="Entrepreneurship">Entrepreneurship</option>
+                        <option value="Financial Literacy">Financial Literacy</option>
+                        <option value="Digital Skills">Digital Skills</option>
                         <option value="Technology Training">Technology Training</option>
                       </select>
                     )}
@@ -1271,15 +1328,60 @@ export function DivisionsView({
               </div>
 
               {activeTab === 'academy' && subMode === 'primary' && (
-                <div>
-                  <label className="block text-xs font-medium mb-1">Syllabus Lessons (one per line)</label>
-                  <textarea
-                    rows={3}
-                    value={fExtra1}
-                    onChange={(e) => setFExtra1(e.target.value)}
-                    placeholder={'Module 1: Architecture Foundations\nModule 2: Security & Payments\nModule 3: Capstone'}
-                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                  />
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Academic Subject</label>
+                      <select
+                        value={fSubject}
+                        onChange={(e) => {
+                          setFSubject(e.target.value);
+                          setFCategory(e.target.value);
+                        }}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      >
+                        {ACADEMIC_SUBJECTS.map((subj) => (
+                          <option key={subj} value={subj}>
+                            {subj}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Language</label>
+                      <select
+                        value={fCourseLang}
+                        onChange={(e) => setFCourseLang(e.target.value as LanguageCode)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      >
+                        {LANGUAGE_OPTIONS.map((l) => (
+                          <option key={l.code} value={l.code}>
+                            {l.nativeLabel}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Issuing Organization</label>
+                      <input
+                        type="text"
+                        value={fIssuingOrg}
+                        onChange={(e) => setFIssuingOrg(e.target.value)}
+                        placeholder="IFIOK SCHOOL"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Syllabus Lessons (one per line)</label>
+                    <textarea
+                      rows={3}
+                      value={fExtra1}
+                      onChange={(e) => setFExtra1(e.target.value)}
+                      placeholder={'Module 1: Architecture Foundations\nModule 2: Security & Payments\nModule 3: Capstone'}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -1288,6 +1390,74 @@ export function DivisionsView({
                   <input type="checkbox" checked={fBool} onChange={(e) => setFBool(e.target.checked)} />
                   <span>Remote-friendly opportunity</span>
                 </label>
+              )}
+
+              {subMode === 'primary' && ['market', 'academy', 'business', 'opportunities', 'freelance'].includes(activeTab) && (
+                <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Source Origin (Provenance)</label>
+                      <input
+                        type="text"
+                        value={fSourceOrigin}
+                        onChange={(e) => setFSourceOrigin(e.target.value)}
+                        placeholder={
+                          activeTab === 'market'
+                            ? 'Genuine Seller Inventory'
+                            : activeTab === 'academy'
+                              ? 'Authorized Educational Material'
+                              : 'Issuing Organization Confirmed'
+                        }
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Source Reference URL (Optional)</label>
+                      <input
+                        type="url"
+                        value={fSourceUrl}
+                        onChange={(e) => setFSourceUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  {(activeTab === 'market' || activeTab === 'academy') && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium mb-1">
+                          Verified Image Upload (PNG / JPEG / WEBP, malware-scanned)
+                        </label>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleUploadImage(file);
+                            }}
+                            className="text-xs"
+                          />
+                          {uploadingImg && <span className="text-xs text-slate-500">Scanning image...</span>}
+                          {fImageUrl && <span className="font-mono text-xs text-emerald-600">{fImageUrl}</span>}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium mb-1">
+                          Locked Paid Content / Materials (Encrypted, unlocked only after Pi verification)
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={fLockedContent}
+                          onChange={(e) => setFLockedContent(e.target.value)}
+                          placeholder="Download link, access instructions, or course syllabus materials..."
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
 
               <div className="flex justify-end gap-3 pt-2">
@@ -1385,7 +1555,7 @@ export function DivisionsView({
                 type="submit"
                 className="w-full py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-sm font-semibold cursor-pointer"
               >
-                Proceed to Pi Testnet Checkout
+                PAY WITH PI (Testnet)
               </button>
             </form>
           </div>
@@ -1479,7 +1649,7 @@ export function DivisionsView({
                         onClick={() => handleCheckoutItem(item)}
                         className="w-full py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
                       >
-                        Checkout via Pi Testnet ({(item.product.price_pi * item.quantity).toFixed(2)} π)
+                        PAY WITH PI ({(item.product.price_pi * item.quantity).toFixed(2)} π Testnet)
                       </button>
                     </div>
                   ))}
@@ -1487,8 +1657,32 @@ export function DivisionsView({
               )}
             </div>
             <p className="text-xs text-slate-500 border-t border-slate-200 dark:border-slate-800 pt-4">
-              All marketplace orders are settled in Pi (π) Testnet with server-side payment verification.
+              Pi Network is the exclusive payment method. Digital items stay locked until server verifies Pi Testnet settlement.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* UNLOCKED DIGITAL ENTITLEMENT MODAL */}
+      {unlockedPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="w-full max-w-lg rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Unlock className="w-4 h-4 text-emerald-600" />
+                <h3 className="font-display font-bold text-slate-950 dark:text-white">{unlockedPreview.title}</h3>
+              </div>
+              <button type="button" onClick={() => setUnlockedPreview(null)} className="cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="rounded-lg bg-slate-50 dark:bg-[#081024] border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words">
+              {unlockedPreview.content}
+            </div>
+            <div className="flex items-center gap-2 text-[11px] font-mono text-slate-500">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              <span>Unlocked via verified Pi payment at {unlockedPreview.unlockedAt}</span>
+            </div>
           </div>
         </div>
       )}

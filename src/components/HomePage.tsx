@@ -5,7 +5,9 @@ import {
   Building2,
   ChevronDown,
   Globe,
+  Lock,
   Moon,
+  Search,
   ShieldCheck,
   ShoppingBag,
   Sun,
@@ -17,8 +19,10 @@ import businessImg from '../assets/images/business_hub_advisory_1794641802926.jp
 import communityImg from '../assets/images/community_summit_collab_1794641802970.jpg';
 import heroImg from '../assets/images/hero_global_network_1794641803186.jpg';
 import marketImg from '../assets/images/market_digital_commerce_1794641803851.jpg';
-import { formatPiPrice, TRANSLATIONS } from '../lib/i18n.ts';
+import { apiRequest } from '../lib/api.ts';
+import { formatPiPrice, LANGUAGE_OPTIONS, TRANSLATIONS } from '../lib/i18n.ts';
 import type {
+  AcademySubView,
   AppView,
   CurrencyCode,
   DivisionTab,
@@ -40,7 +44,7 @@ interface HomePageProps {
   onChangeLanguage: (lang: LanguageCode) => void;
   onChangeCurrency: (curr: CurrencyCode) => void;
   onOpenAuth: (mode?: 'login' | 'register') => void;
-  onOpenDivision: (tab: DivisionTab) => void;
+  onOpenDivision: (tab: DivisionTab, academySubView?: AcademySubView) => void;
   onNavigateView: (view: AppView) => void;
   onOpenPolicy: (policy: PolicyKey) => void;
 }
@@ -80,8 +84,44 @@ export function HomePage({
   onOpenPolicy,
 }: HomePageProps) {
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const [globalQuery, setGlobalQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<
+    Array<{ id: number; title: string; subtitle: string; pricePi: number | null; source_origin?: string; division: DivisionTab }>
+  >([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const t = TRANSLATIONS[language];
   const usdRate = summary?.settings.informationalUsdPerPi ?? 1.0;
+
+  const handleGlobalSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const q = globalQuery.trim();
+    if (q.length < 2) {
+      setSearchResults([]);
+      setHasSearched(false);
+      return;
+    }
+    setSearching(true);
+    try {
+      const res = await apiRequest<{
+        results: Array<{
+          id: number;
+          title: string;
+          subtitle: string;
+          pricePi: number | null;
+          source_origin?: string;
+          division: DivisionTab;
+        }>;
+      }>(`/api/divisions/search?q=${encodeURIComponent(q)}`);
+      setSearchResults(res.results);
+      setHasSearched(true);
+    } catch {
+      setSearchResults([]);
+      setHasSearched(true);
+    } finally {
+      setSearching(false);
+    }
+  };
 
   return (
     <div id="top" className="min-h-screen bg-slate-50 dark:bg-[#070C1B] text-slate-900 dark:text-slate-100">
@@ -103,7 +143,7 @@ export function HomePage({
                 <div className="flex items-center gap-3 text-xs font-medium text-slate-500 dark:text-slate-400">
                   <span>{t.slogan}</span>
                   <span aria-hidden="true">·</span>
-                  <span>Pi Testnet Active</span>
+                  <span>Pi Network Exclusive (Testnet)</span>
                 </div>
               </div>
 
@@ -119,8 +159,65 @@ export function HomePage({
                   'IFIOK-EN connects global learners, verified SMEs, independent talent, and Pi-settled digital commerce inside one audited, role-governed platform.'}
               </p>
 
+              {/* Global Cross-Division Search Bar */}
+              <div className="space-y-2 max-w-xl">
+                <form onSubmit={handleGlobalSearch} className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="search"
+                      value={globalQuery}
+                      onChange={(e) => {
+                        setGlobalQuery(e.target.value);
+                        if (!e.target.value.trim()) setHasSearched(false);
+                      }}
+                      placeholder="Search verified courses, products, SMEs, freelance, grants..."
+                      aria-label="Search across all IFIOK-EN divisions"
+                      className="w-full pl-10 pr-3.5 py-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#0B1530] text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={searching}
+                    className="px-5 py-3 rounded-lg text-sm font-semibold bg-purple-700 hover:bg-purple-800 dark:bg-purple-600 dark:hover:bg-purple-500 text-white transition-colors shrink-0 cursor-pointer disabled:opacity-60"
+                  >
+                    {searching ? 'Searching...' : 'Search'}
+                  </button>
+                </form>
+
+                {hasSearched && (
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0D152B] shadow-lg divide-y divide-slate-200 dark:divide-slate-800 max-h-64 overflow-y-auto">
+                    {searchResults.length === 0 ? (
+                      <div className="p-4 text-xs text-slate-500 dark:text-slate-400">
+                        No verified listings match "{globalQuery}". Only vetted, genuine catalog items are indexed.
+                      </div>
+                    ) : (
+                      searchResults.map((item) => (
+                        <button
+                          key={`${item.division}-${item.id}`}
+                          type="button"
+                          onClick={() => onOpenDivision(item.division)}
+                          className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 flex items-center justify-between gap-3 cursor-pointer"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-slate-900 dark:text-white truncate">{item.title}</div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 capitalize truncate">
+                              {item.division === 'academy' ? 'IFIOK SCHOOL' : item.division} · {item.subtitle}
+                              {item.source_origin ? ` · ${item.source_origin}` : ''}
+                            </div>
+                          </div>
+                          <span className="font-mono text-xs font-semibold text-amber-600 dark:text-amber-400 shrink-0">
+                            {item.pricePi !== null ? `${item.pricePi} π` : 'Open'}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Primary + Secondary CTAs */}
-              <div className="flex flex-wrap items-center gap-4 pt-2">
+              <div className="flex flex-wrap items-center gap-4 pt-1">
                 <button
                   type="button"
                   onClick={() => (user ? onNavigateView('dashboard') : onOpenAuth('register'))}
@@ -162,10 +259,11 @@ export function HomePage({
                     onChange={(e) => onChangeLanguage(e.target.value as LanguageCode)}
                     className="bg-transparent font-medium text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
                   >
-                    <option value="en" className="dark:bg-[#0D152B]">English</option>
-                    <option value="fr" className="dark:bg-[#0D152B]">Français</option>
-                    <option value="es" className="dark:bg-[#0D152B]">Español</option>
-                    <option value="pt" className="dark:bg-[#0D152B]">Português</option>
+                    {LANGUAGE_OPTIONS.map((l) => (
+                      <option key={l.code} value={l.code} className="dark:bg-[#0D152B]">
+                        {l.nativeLabel} ({l.label})
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <span aria-hidden="true">·</span>
@@ -199,14 +297,14 @@ export function HomePage({
                 <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
                 <div className="absolute bottom-5 left-5 right-5 flex flex-wrap items-end justify-between gap-4 text-white">
                   <div>
-                    <p className="text-xs font-medium text-amber-300">Global Digital Empowerment Network</p>
+                    <p className="text-xs font-medium text-amber-300">Pi Network Exclusive Settlement</p>
                     <p className="text-sm sm:text-base font-display font-semibold mt-0.5">
-                      Six integrated divisions settled on Pi Testnet
+                      Six integrated divisions settled exclusively in Pi (Testnet Active)
                     </p>
                   </div>
                   <div className="text-right font-mono text-xs text-slate-200 tabular-nums">
-                    <div>Settlement: Pi (π)</div>
-                    <div>Mainnet: Locked until approval</div>
+                    <div>Payment Method: Pi Network Only</div>
+                    <div>Paid Access: Auto-Locked Until Verified</div>
                   </div>
                 </div>
               </div>
@@ -218,7 +316,7 @@ export function HomePage({
             {[
               { label: 'Active Members', value: summary?.stats.members ?? 0 },
               { label: 'Verified Businesses', value: summary?.stats.verifiedBusinesses ?? 0 },
-              { label: 'Academy Courses', value: summary?.stats.approvedCourses ?? 0 },
+              { label: 'IFIOK SCHOOL Courses', value: summary?.stats.approvedCourses ?? 0 },
               { label: 'Freelance Services', value: summary?.stats.approvedServices ?? 0 },
               { label: 'Open Opportunities', value: summary?.stats.approvedOpportunities ?? 0 },
               { label: 'Market Listings', value: summary?.stats.approvedProducts ?? 0 },
@@ -247,12 +345,12 @@ export function HomePage({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {/* 01. IFIOK ACADEMY (Span 2 on lg for visual hierarchy) */}
+          {/* 01. IFIOK SCHOOL (Span 2 on lg for visual hierarchy) */}
           <article className="lg:col-span-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-hidden grid grid-cols-1 sm:grid-cols-2">
             <div className="h-56 sm:h-auto bg-slate-900">
               <img
                 src={academyImg}
-                alt="IFIOK Academy technology instruction session"
+                alt="IFIOK SCHOOL — Global Digital Learning instruction session"
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
               />
@@ -261,22 +359,61 @@ export function HomePage({
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                   <BookOpen className="w-4 h-4 text-purple-700 dark:text-amber-400" />
-                  <span>01. IFIOK Academy</span>
+                  <span>01. IFIOK SCHOOL — Global Digital Learning</span>
                 </div>
                 <h3 className="text-xl font-display font-bold text-slate-950 dark:text-white">
-                  Practical technology, Web3 & entrepreneurship training
+                  Learn Without Borders. Grow Without Limits.
                 </h3>
                 <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                  Structured courses led by vetted instructors with lesson progress tracking and publicly verifiable completion certificates.
+                  Serving individual students worldwide, primary & secondary schools, colleges, training institutions, independent educators, and adult lifelong learners across 17 subjects and 15 languages with IFIOK Professor AI.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => onOpenDivision('academy')}
-                className="inline-flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
-              >
-                Explore Academy <ArrowRight className="w-4 h-4" />
-              </button>
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={() => onOpenDivision('academy', 'courses')}
+                  className="inline-flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+                >
+                  Explore IFIOK SCHOOL <ArrowRight className="w-4 h-4" />
+                </button>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => onOpenDivision('academy', 'student_portal')}
+                    className="text-xs font-semibold text-slate-700 dark:text-slate-200 hover:underline cursor-pointer"
+                  >
+                    IFIOK Student Portal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDivision('academy', 'teacher_portal')}
+                    className="text-xs font-semibold text-slate-700 dark:text-slate-200 hover:underline cursor-pointer"
+                  >
+                    IFIOK Teacher Portal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDivision('academy', 'schools')}
+                    className="text-xs font-semibold text-slate-700 dark:text-slate-200 hover:underline cursor-pointer"
+                  >
+                    {t.schoolPortalTitle}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDivision('academy', 'guardian_portal')}
+                    className="text-xs font-semibold text-slate-700 dark:text-slate-200 hover:underline cursor-pointer"
+                  >
+                    IFIOK Parent/Guardian Portal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDivision('academy', 'professor')}
+                    className="text-xs font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+                  >
+                    IFIOK Professor AI Learning Portal
+                  </button>
+                </div>
+              </div>
             </div>
           </article>
 
@@ -453,7 +590,8 @@ export function HomePage({
                       <div>
                         <h3 className="font-semibold text-slate-900 dark:text-white">{b.business_name}</h3>
                         <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                          {b.sector} · {b.country} · Verified SME
+                          {b.sector} · {b.country} · {b.source_origin || 'Verified SME'}
+                          {b.last_verified_at ? ` · Verified ${b.last_verified_at.slice(0, 10)}` : ''}
                         </p>
                         <p className="text-sm text-slate-600 dark:text-slate-300 mt-2 line-clamp-2">{b.summary}</p>
                       </div>
@@ -489,7 +627,7 @@ export function HomePage({
             <div>
               <div className="flex items-baseline justify-between mb-6">
                 <div>
-                  <h2 className="text-2xl font-display font-bold text-slate-950 dark:text-white">Featured Academy Courses</h2>
+                  <h2 className="text-2xl font-display font-bold text-slate-950 dark:text-white">Featured IFIOK SCHOOL Courses</h2>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Approved courses with verifiable completion certificates</p>
                 </div>
                 <button
@@ -509,7 +647,8 @@ export function HomePage({
                         <div>
                           <h3 className="font-semibold text-slate-900 dark:text-white">{c.title}</h3>
                           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {c.category} · {c.level} · {c.duration_hours} hrs · {c.instructor_name}
+                            {c.category} · {c.level} · {c.duration_hours} hrs · {c.instructor_name} ·{' '}
+                            {c.source_origin || 'Authorized Material'}
                           </p>
                         </div>
                         <div className="text-right shrink-0">
@@ -530,14 +669,14 @@ export function HomePage({
                     No approved courses published yet.
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-                    Instructors can submit accredited curricula from the Academy workspace for administrator approval.
+                    Educators and institutions can submit accredited curricula from IFIOK SCHOOL for administrator approval.
                   </p>
                   <button
                     type="button"
                     onClick={() => onOpenDivision('academy')}
                     className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 cursor-pointer"
                   >
-                    Open Academy
+                    Open IFIOK SCHOOL
                   </button>
                 </div>
               )}
@@ -622,7 +761,8 @@ export function HomePage({
                         <div>
                           <h3 className="font-semibold text-slate-900 dark:text-white">{p.title}</h3>
                           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {p.category} · {p.store_name} ({p.seller_country})
+                            {p.category} · {p.store_name} ({p.seller_country}) · {p.source_origin || 'Verified Seller'} ·{' '}
+                            {p.availability_status || 'available'}
                           </p>
                         </div>
                         <div className="text-right shrink-0">
@@ -675,7 +815,7 @@ export function HomePage({
               },
               {
                 step: '02. Build Capabilities',
-                desc: 'Enrol in vetted Academy courses, earn verifiable completion certificates, or register your SME business profile.',
+                desc: 'Enrol in vetted IFIOK SCHOOL courses, earn verifiable completion certificates, or register your SME business profile.',
               },
               {
                 step: '03. Deliver & Trade',
@@ -699,31 +839,34 @@ export function HomePage({
 
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-[#0E1A36] text-white p-8 sm:p-12 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
           <div className="lg:col-span-5 space-y-3">
-            <p className="text-xs font-semibold text-amber-400">Why Choose IFIOK-EN</p>
+            <div className="inline-flex items-center gap-2 text-xs font-semibold text-amber-400">
+              <Lock className="w-4 h-4" />
+              <span>Pi-Exclusive & Defense-in-Depth Trust</span>
+            </div>
             <h2 className="text-3xl font-display font-bold leading-tight">
-              Built on server-enforced security and honest economics
+              Server-enforced payment locking, encryption & active fraud monitoring
             </h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Every listing, payment confirmation, role permission, and certificate is validated server-side against our relational database.
+              Every listing provenance, paid entitlement, role permission, and Pi Testnet completion is verified on our server before unlocking digital access or physical fulfillment.
             </p>
           </div>
           <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-6">
             {[
               {
-                title: 'Zero Browser-Only Trust',
-                body: 'Pi payments are never confirmed on client state alone; server verification against api.minepi.com is mandatory.',
+                title: 'Pi Network Exclusive Payments',
+                body: 'No bank cards, PayPal, Stripe, or outside crypto. Paid products & courses remain locked until api.minepi.com confirms settlement.',
               },
               {
-                title: 'Role-Based Governance',
-                body: 'Separate permissions for members, students, instructors, freelancers, sellers, organisations, and global administrators.',
+                title: 'Account & MFA Protection',
+                body: 'TOTP multi-factor authentication, AES-256-GCM encrypted sensitive fields, CSRF origin protection, and RBAC permission boundaries.',
               },
               {
-                title: 'Transparent Revenue Model',
-                body: `Disclosed ${summary?.settings.freelanceCommissionPct ?? 8}% freelance and ${summary?.settings.marketplaceCommissionPct ?? 5}% marketplace fees with optional subscriptions.`,
+                title: 'Scanned Uploads & Velocity Alerts',
+                body: 'Magic-byte + script-signature file checks alongside automated fraud/velocity alerting, dispute mediation, and full audit trails.',
               },
               {
-                title: 'Global Accessibility',
-                body: 'International phone codes, country and timezone selection, multilingual readiness, and informational currency views.',
+                title: 'Zero Fabricated Listings',
+                body: `Recorded source origins & verification dates on listings. Transparent ${summary?.settings.freelanceCommissionPct ?? 8}% freelance and ${summary?.settings.marketplaceCommissionPct ?? 5}% market fees.`,
               },
             ].map((point) => (
               <div key={point.title} className="space-y-1.5 border-t border-white/15 pt-4">
@@ -782,7 +925,7 @@ export function HomePage({
             <h3 className="font-display font-semibold text-slate-900 dark:text-white mb-2">Business Divisions</h3>
             {(
               [
-                ['academy', 'IFIOK Academy'],
+                ['academy', 'IFIOK SCHOOL'],
                 ['business', 'IFIOK Business Hub'],
                 ['freelance', 'IFIOK Freelance'],
                 ['opportunities', 'IFIOK Opportunities'],
@@ -846,7 +989,7 @@ export function HomePage({
 
         <div className="mx-auto max-w-[1280px] px-4 sm:px-6 mt-10 pt-6 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
           <span>© {new Date().getFullYear()} IFIOK-EN Global Digital Empowerment Network.</span>
-          <span>Pi (π) is the designated platform currency. Reference rates are informational only.</span>
+          <span>Pi Network is the exclusive platform payment method (Testnet Active). Reference rates are informational only.</span>
         </div>
       </footer>
     </div>

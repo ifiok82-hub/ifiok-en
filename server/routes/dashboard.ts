@@ -20,10 +20,18 @@ router.get('/overview', requireAuth, (req, res) => {
 
   const instructorProfile = db.prepare(`SELECT * FROM instructors WHERE user_id = ?`).get(uid);
   const myCourses = instructorProfile
-    ? db.prepare(`SELECT * FROM courses WHERE instructor_id = ? ORDER BY created_at DESC`).all((instructorProfile as { id: number }).id)
+    ? db.prepare(`
+        SELECT id, instructor_id, title, slug, category, level, duration_hours, price_pi,
+               approval_status, source_origin, availability_status, last_verified_at, created_at
+        FROM courses WHERE instructor_id = ? ORDER BY created_at DESC
+      `).all((instructorProfile as { id: number }).id)
     : [];
 
-  const businesses = db.prepare(`SELECT * FROM business_profiles WHERE owner_user_id = ? ORDER BY created_at DESC`).all(uid);
+  const businesses = db.prepare(`
+    SELECT id, owner_user_id, business_name, registration_number, sector, country, website,
+           summary, services_offered, verification_status, source_origin, availability_status, last_verified_at, created_at
+    FROM business_profiles WHERE owner_user_id = ? ORDER BY created_at DESC
+  `).all(uid);
   const myServices = db.prepare(`SELECT * FROM freelance_services WHERE freelancer_user_id = ? ORDER BY created_at DESC`).all(uid);
 
   const projects = db.prepare(`
@@ -37,7 +45,11 @@ router.get('/overview', requireAuth, (req, res) => {
 
   const sellerProfile = db.prepare(`SELECT * FROM sellers WHERE user_id = ?`).get(uid);
   const myProducts = sellerProfile
-    ? db.prepare(`SELECT * FROM products WHERE seller_id = ? ORDER BY created_at DESC`).all((sellerProfile as { id: number }).id)
+    ? db.prepare(`
+        SELECT id, seller_id, title, category, product_type, description, price_pi, stock_qty,
+               image_url, approval_status, source_origin, availability_status, last_verified_at, created_at
+        FROM products WHERE seller_id = ? ORDER BY created_at DESC
+      `).all((sellerProfile as { id: number }).id)
     : [];
 
   const applications = db.prepare(`
@@ -73,6 +85,59 @@ router.get('/overview', requireAuth, (req, res) => {
     ORDER BY o.created_at DESC
   `).all(uid);
 
+  const entitlements = db.prepare(`
+    SELECT e.id, e.order_id, e.item_type, e.item_id, e.is_unlocked, e.unlocked_at, e.revoked_at,
+           o.status as order_status, o.item_title
+    FROM entitlements e
+    JOIN orders o ON o.id = e.order_id
+    WHERE e.user_id = ?
+    ORDER BY e.id DESC
+  `).all(uid);
+
+  const sellerOrders = sellerProfile
+    ? db.prepare(`
+        SELECT o.id, o.order_type, o.reference_id, o.item_title, o.total_pi, o.status, o.fulfillment_status, o.created_at,
+               u.full_name as buyer_name, pr.product_type
+        FROM orders o
+        JOIN products pr ON pr.id = o.reference_id
+        JOIN users u ON u.id = o.buyer_user_id
+        WHERE o.order_type = 'product' AND pr.seller_id = ?
+        ORDER BY o.created_at DESC
+      `).all((sellerProfile as { id: number }).id)
+    : [];
+
+  const schoolMemberships = db.prepare(`
+    SELECT sm.id, sm.school_id, sm.member_role, sm.class_id, sm.guardian_of_student_user_id, sm.status,
+           s.name as school_name, s.school_type, s.country, s.verification_status,
+           c.name as class_name, c.subject as class_subject
+    FROM school_memberships sm
+    JOIN schools s ON s.id = sm.school_id
+    LEFT JOIN school_classes c ON c.id = sm.class_id
+    WHERE sm.user_id = ? AND sm.status = 'active'
+    ORDER BY sm.created_at DESC
+  `).all(uid);
+
+  const schoolSubmissions = db.prepare(`
+    SELECT sub.id, sub.assignment_id, sub.school_id, sub.score, sub.feedback, sub.status, sub.submitted_at, sub.graded_at,
+           a.title as assignment_title, a.subject, a.max_score, a.is_exam, s.name as school_name
+    FROM assignment_submissions sub
+    JOIN school_assignments a ON a.id = sub.assignment_id
+    JOIN schools s ON s.id = sub.school_id
+    WHERE sub.student_user_id = ?
+    ORDER BY sub.submitted_at DESC
+  `).all(uid);
+
+  const guardianWards = db.prepare(`
+    SELECT sm.school_id, s.name as school_name, u.id as student_user_id, u.full_name as student_name,
+           (SELECT COUNT(*) FROM school_attendance att WHERE att.school_id = sm.school_id AND att.student_user_id = u.id AND att.status = 'present') as present_count,
+           (SELECT COUNT(*) FROM school_attendance att WHERE att.school_id = sm.school_id AND att.student_user_id = u.id) as attendance_total,
+           (SELECT ROUND(AVG(sub.score), 1) FROM assignment_submissions sub WHERE sub.school_id = sm.school_id AND sub.student_user_id = u.id AND sub.status = 'graded') as avg_score
+    FROM school_memberships sm
+    JOIN schools s ON s.id = sm.school_id
+    JOIN users u ON u.id = sm.guardian_of_student_user_id
+    WHERE sm.user_id = ? AND sm.member_role = 'guardian' AND sm.status = 'active'
+  `).all(uid);
+
   res.json({
     enrolments,
     instructorProfile,
@@ -88,6 +153,11 @@ router.get('/overview', requireAuth, (req, res) => {
     subscriptions,
     disputes,
     orders,
+    entitlements,
+    sellerOrders,
+    schoolMemberships,
+    schoolSubmissions,
+    guardianWards,
   });
 });
 

@@ -7,19 +7,23 @@ import {
   CreditCard,
   Flag,
   HelpCircle,
+  KeyRound,
   LayoutDashboard,
+  Lock,
   LogOut,
   MessageSquare,
   Shield,
   ShoppingBag,
+  Unlock,
   UserCheck,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api.ts';
-import { COUNTRIES, PHONE_CODES, TIMEZONES } from '../lib/i18n.ts';
+import { COUNTRIES, EDUCATION_LEVELS, LANGUAGE_OPTIONS, PHONE_CODES, TIMEZONES } from '../lib/i18n.ts';
 import { startPiPaymentFlow } from '../lib/pi.ts';
-import type { AppView, DivisionTab, PlatformSettingsPublic, UserProfile } from '../types/platform.ts';
+import type { AcademySubView, AppView, DivisionTab, LanguageCode, PlatformSettingsPublic, UserProfile } from '../types/platform.ts';
+import { SchoolManagementPortal } from './SchoolManagementPortal.tsx';
 
 type MemberTab =
   | 'overview'
@@ -37,10 +41,12 @@ type MemberTab =
 interface MemberDashboardProps {
   user: UserProfile;
   settings: PlatformSettingsPublic | null;
+  language: LanguageCode;
+  onChangeLanguage: (lang: LanguageCode) => void;
   onUserUpdated: (user: UserProfile) => void;
   onLogout: () => void;
   onBackHome: () => void;
-  onOpenDivision: (tab: DivisionTab) => void;
+  onOpenDivision: (tab: DivisionTab, academySubView?: AcademySubView) => void;
   onNavigateView: (view: AppView) => void;
 }
 
@@ -109,22 +115,79 @@ interface DashboardData {
   orders: Array<{
     id: number;
     order_type: string;
+    reference_id: number;
     item_title: string;
     subtotal_pi: number;
     platform_fee_pi: number;
     total_pi: number;
     status: string;
+    fulfillment_status?: string;
     pi_payment_id: string | null;
     txid: string | null;
     environment: string | null;
     payment_status: string | null;
     created_at: string;
   }>;
+  entitlements?: Array<{
+    id: number;
+    order_id: number;
+    item_type: 'product' | 'course';
+    item_id: number;
+    is_unlocked: number;
+    unlocked_at: string | null;
+    revoked_at: string | null;
+    order_status: string;
+    item_title: string;
+  }>;
+  sellerOrders?: Array<{
+    id: number;
+    order_type: string;
+    reference_id: number;
+    item_title: string;
+    total_pi: number;
+    status: string;
+    fulfillment_status: string;
+    buyer_name: string;
+    product_type: string;
+    created_at: string;
+  }>;
+  schoolMemberships?: Array<{
+    id: number;
+    school_id: number;
+    member_role: string;
+    school_name: string;
+    school_type: string;
+    country: string;
+    verification_status: string;
+    class_name: string | null;
+  }>;
+  schoolSubmissions?: Array<{
+    id: number;
+    assignment_title: string;
+    subject: string;
+    score: number | null;
+    max_score: number;
+    is_exam: number;
+    status: string;
+    school_name: string;
+    submitted_at: string;
+  }>;
+  guardianWards?: Array<{
+    school_id: number;
+    school_name: string;
+    student_user_id: number;
+    student_name: string;
+    present_count: number;
+    attendance_total: number;
+    avg_score: number | null;
+  }>;
 }
 
 export function MemberDashboard({
   user,
   settings,
+  language,
+  onChangeLanguage,
   onUserUpdated,
   onLogout,
   onBackHome,
@@ -141,6 +204,10 @@ export function MemberDashboard({
   const [bio, setBio] = useState(user.bio || '');
   const [country, setCountry] = useState(user.country || 'Global');
   const [timezone, setTimezone] = useState(user.timezone || 'UTC');
+  const [prefLang, setPrefLang] = useState<LanguageCode>((user.preferred_language as LanguageCode) || language);
+  const [eduLevel, setEduLevel] = useState(user.education_level || 'undergraduate');
+  const [guardianName, setGuardianName] = useState(user.guardian_name || '');
+  const [guardianEmail, setGuardianEmail] = useState(user.guardian_email || '');
   const [phoneCode, setPhoneCode] = useState(user.phone_country_code || '+1');
   const [phoneNumber, setPhoneNumber] = useState(user.phone_number || '');
 
@@ -148,6 +215,13 @@ export function MemberDashboard({
   const [supportType, setSupportType] = useState<'support' | 'fraud' | 'order' | 'project'>('support');
   const [supportReason, setSupportReason] = useState('');
   const [supportDetails, setSupportDetails] = useState('');
+
+  // MFA management state
+  const [mfaSetup, setMfaSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const [mfaVerifyCode, setMfaVerifyCode] = useState('');
+
+  // Unlocked content viewer state
+  const [unlockedModal, setUnlockedModal] = useState<{ title: string; content: string; unlockedAt: string } | null>(null);
 
   const isAdmin = user.roles.some((r) => ['super_admin', 'moderator', 'finance_admin'].includes(r));
 
@@ -177,12 +251,17 @@ export function MemberDashboard({
           bio,
           country,
           timezone,
+          preferredLanguage: prefLang,
+          educationLevel: eduLevel,
+          guardianName: guardianName || undefined,
+          guardianEmail: guardianEmail || undefined,
           phoneCountryCode: phoneCode,
           phoneNumber,
         }),
       });
+      onChangeLanguage(prefLang);
       onUserUpdated(res.user);
-      setNotice({ type: 'ok', text: 'Profile preferences saved.' });
+      setNotice({ type: 'ok', text: 'Profile, language & education preferences saved.' });
     } catch (err) {
       setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Could not update profile.' });
     }
@@ -270,12 +349,77 @@ export function MemberDashboard({
     }
   };
 
+  const handleInitMfaSetup = async () => {
+    try {
+      const res = await apiRequest<{ secret: string; otpauthUri: string }>('/api/auth/mfa/setup', { method: 'POST' });
+      setMfaSetup(res);
+      setMfaVerifyCode('');
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Could not initialize MFA setup.' });
+    }
+  };
+
+  const handleEnableMfa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await apiRequest('/api/auth/mfa/enable', {
+        method: 'POST',
+        body: JSON.stringify({ code: mfaVerifyCode.trim() }),
+      });
+      onUserUpdated({ ...user, mfa_enabled: 1 });
+      setMfaSetup(null);
+      setMfaVerifyCode('');
+      setNotice({ type: 'ok', text: 'Two-Factor Authentication (TOTP MFA) is now active on your account.' });
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Could not enable MFA.' });
+    }
+  };
+
+  const handleDisableMfa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await apiRequest('/api/auth/mfa/disable', {
+        method: 'POST',
+        body: JSON.stringify({ code: mfaVerifyCode.trim() }),
+      });
+      onUserUpdated({ ...user, mfa_enabled: 0 });
+      setMfaVerifyCode('');
+      setNotice({ type: 'ok', text: 'TOTP Multi-Factor Authentication disabled.' });
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Could not disable MFA.' });
+    }
+  };
+
+  const handleAccessEntitlement = async (itemType: 'product' | 'course', itemId: number) => {
+    try {
+      const res = await apiRequest<{ unlocked: boolean; unlockedAt: string; title: string; content: string }>(
+        `/api/payments/entitlements/${itemType}/${itemId}`
+      );
+      setUnlockedModal({ title: res.title, content: res.content, unlockedAt: res.unlockedAt });
+    } catch (err) {
+      setNotice({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Content remains locked until Pi Network payment is verified.',
+      });
+    }
+  };
+
+  const handleFulfillOrder = async (orderId: number) => {
+    try {
+      await apiRequest(`/api/payments/orders/${orderId}/fulfill`, { method: 'POST' });
+      setNotice({ type: 'ok', text: `Order #${orderId} marked fulfilled.` });
+      fetchOverview();
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Could not fulfill order.' });
+    }
+  };
+
   const unreadCount = data?.notifications.filter((n) => n.is_read === 0).length ?? 0;
 
   const navItems: Array<{ id: MemberTab; label: string; icon: typeof LayoutDashboard }> = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'profile', label: 'Account Profile', icon: UserCheck },
-    { id: 'academy', label: 'Academy Courses', icon: BookOpen },
+    { id: 'academy', label: 'IFIOK SCHOOL & Portals', icon: BookOpen },
     { id: 'business', label: 'Business Hub', icon: Building2 },
     { id: 'freelance', label: 'Freelance Projects', icon: Briefcase },
     { id: 'orders', label: 'Market & Orders', icon: ShoppingBag },
@@ -406,9 +550,23 @@ export function MemberDashboard({
                 <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4">
                   <h2 className="font-display font-bold text-slate-950 dark:text-white">Quick Division Access</h2>
                   <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => onOpenDivision('academy', 'professor')}
+                      className="px-4 py-2 rounded-lg bg-purple-700 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      IFIOK Professor AI Portal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTab('academy')}
+                      className="px-4 py-2 rounded-lg border border-amber-500/60 text-xs font-semibold text-amber-700 dark:text-amber-300 cursor-pointer"
+                    >
+                      Open IFIOK SCHOOL Portals
+                    </button>
                     {(
                       [
-                        ['academy', 'IFIOK Academy'],
+                        ['academy', 'IFIOK SCHOOL'],
                         ['business', 'Business Hub'],
                         ['freelance', 'Freelance'],
                         ['opportunities', 'Opportunities'],
@@ -431,116 +589,287 @@ export function MemberDashboard({
             )}
 
             {tab === 'profile' && (
-              <form
-                onSubmit={handleSaveProfile}
-                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4 max-w-2xl"
-              >
-                <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">Account Profile</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium mb-1">Full Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium mb-1">Email / Pi Handle</label>
-                    <input
-                      type="text"
-                      disabled
-                      value={user.email || (user.pi_username ? `@${user.pi_username}` : '')}
-                      className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 px-3 py-2 text-sm text-slate-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium mb-1">Country</label>
-                    <select
-                      value={country}
-                      onChange={(e) => setCountry(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                    >
-                      {COUNTRIES.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium mb-1">Time Zone</label>
-                    <select
-                      value={timezone}
-                      onChange={(e) => setTimezone(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                    >
-                      {TIMEZONES.map((tz) => (
-                        <option key={tz} value={tz}>
-                          {tz}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">International Phone Number</label>
-                  <div className="flex gap-2">
-                    <select
-                      value={phoneCode}
-                      onChange={(e) => setPhoneCode(e.target.value)}
-                      className="w-36 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-2.5 py-2 text-sm"
-                    >
-                      {PHONE_CODES.map((p) => (
-                        <option key={p.code} value={p.code}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="tel"
-                      value={phoneNumber}
-                      onChange={(e) => setPhoneNumber(e.target.value)}
-                      className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Professional Bio</label>
-                  <textarea
-                    rows={3}
-                    value={bio}
-                    onChange={(e) => setBio(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+              <div className="space-y-6 max-w-2xl">
+                <form
+                  onSubmit={handleSaveProfile}
+                  className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4"
                 >
-                  Save Profile
-                </button>
-              </form>
+                  <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">Account Profile</h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Full Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Email / Pi Handle</label>
+                      <input
+                        type="text"
+                        disabled
+                        value={user.email || (user.pi_username ? `@${user.pi_username}` : '')}
+                        className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 px-3 py-2 text-sm text-slate-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Country</label>
+                      <select
+                        value={country}
+                        onChange={(e) => setCountry(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        {COUNTRIES.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Time Zone</label>
+                      <select
+                        value={timezone}
+                        onChange={(e) => setTimezone(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        {TIMEZONES.map((tz) => (
+                          <option key={tz} value={tz}>
+                            {tz}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Preferred Interface & AI Language</label>
+                      <select
+                        value={prefLang}
+                        onChange={(e) => setPrefLang(e.target.value as LanguageCode)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        {LANGUAGE_OPTIONS.map((l) => (
+                          <option key={l.code} value={l.code}>
+                            {l.nativeLabel} — {l.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Education Level</label>
+                      <select
+                        value={eduLevel}
+                        onChange={(e) => setEduLevel(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        {EDUCATION_LEVELS.map((lvl) => (
+                          <option key={lvl.value} value={lvl.value}>
+                            {lvl.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-3.5 space-y-2">
+                    <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                      Child Protection & Guardian Oversight (Age Tier: <span className="font-mono">{user.age_group || 'adult'}</span>)
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <input
+                        type="text"
+                        value={guardianName}
+                        onChange={(e) => setGuardianName(e.target.value)}
+                        placeholder="Guardian Full Name (optional for adults)"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                      />
+                      <input
+                        type="email"
+                        value={guardianEmail}
+                        onChange={(e) => setGuardianEmail(e.target.value)}
+                        placeholder="Guardian Email"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">International Phone Number (Encrypted at Rest)</label>
+                    <div className="flex gap-2">
+                      <select
+                        value={phoneCode}
+                        onChange={(e) => setPhoneCode(e.target.value)}
+                        className="w-36 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-2.5 py-2 text-sm"
+                      >
+                        {PHONE_CODES.map((p) => (
+                          <option key={p.code} value={p.code}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="tel"
+                        value={phoneNumber}
+                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Professional Bio</label>
+                    <textarea
+                      rows={3}
+                      value={bio}
+                      onChange={(e) => setBio(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                  >
+                    Save Profile
+                  </button>
+                </form>
+
+                {/* TOTP Multi-Factor Authentication Security Card */}
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2.5">
+                      <KeyRound className="w-5 h-5 text-amber-500" />
+                      <div>
+                        <h3 className="font-display font-bold text-base text-slate-950 dark:text-white">
+                          Two-Factor Authentication (TOTP MFA)
+                        </h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Protect administrator and member logins using an RFC 6238 authenticator app.
+                        </p>
+                      </div>
+                    </div>
+                    <span className="font-mono text-xs font-semibold uppercase text-slate-700 dark:text-amber-400">
+                      {user.mfa_enabled === 1 ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+
+                  {user.mfa_enabled === 1 ? (
+                    <form onSubmit={handleDisableMfa} className="flex flex-wrap items-end gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                      <div className="flex-1 min-w-[200px]">
+                        <label className="block text-xs font-medium mb-1">Confirm 6-digit code to disable MFA</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={6}
+                          required
+                          value={mfaVerifyCode}
+                          onChange={(e) => setMfaVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                          placeholder="000000"
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        className="px-4 py-2 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold cursor-pointer"
+                      >
+                        Disable MFA
+                      </button>
+                    </form>
+                  ) : !mfaSetup ? (
+                    <button
+                      type="button"
+                      onClick={handleInitMfaSetup}
+                      className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                    >
+                      Initialize Authenticator MFA
+                    </button>
+                  ) : (
+                    <form onSubmit={handleEnableMfa} className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                      <div className="rounded-lg bg-slate-50 dark:bg-[#081024] border border-slate-200 dark:border-slate-800 p-3 space-y-1.5 text-xs">
+                        <div className="font-semibold text-slate-800 dark:text-slate-200">
+                          Add this secret key to Google Authenticator / 1Password / Authy:
+                        </div>
+                        <div className="font-mono text-sm font-bold text-amber-600 dark:text-amber-400 break-all">
+                          {mfaSetup.secret}
+                        </div>
+                        <div className="font-mono text-[11px] text-slate-500 break-all">{mfaSetup.otpauthUri}</div>
+                      </div>
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div className="flex-1 min-w-[200px]">
+                          <label className="block text-xs font-medium mb-1">Enter 6-digit code from app</label>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            maxLength={6}
+                            required
+                            value={mfaVerifyCode}
+                            onChange={(e) => setMfaVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                            placeholder="000000"
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
+                        >
+                          Verify & Activate MFA
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              </div>
             )}
 
             {tab === 'academy' && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
-                    My Academy Enrolments
-                  </h2>
-                  <button
-                    type="button"
-                    onClick={() => onOpenDivision('academy')}
-                    className="text-xs font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
-                  >
-                    Browse Courses
-                  </button>
+              <div className="space-y-8">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                      IFIOK SCHOOL Enrolments, Portals & Certificates
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Track course completion, launch IFIOK Professor, or manage your school classes, teaching & guardian oversight below.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpenDivision('academy', 'student_portal')}
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                    >
+                      Student Portal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenDivision('academy', 'teacher_portal')}
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                    >
+                      Teacher Portal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenDivision('academy', 'guardian_portal')}
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                    >
+                      Parent/Guardian Portal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenDivision('academy', 'professor')}
+                      className="px-3.5 py-1.5 rounded-lg bg-purple-700 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      IFIOK Professor AI Portal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenDivision('academy', 'courses')}
+                      className="px-3.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                    >
+                      Browse 17 Subjects
+                    </button>
+                  </div>
                 </div>
                 {data.enrolments.length === 0 ? (
-                  <p className="text-sm text-slate-500">You have not enrolled in any courses yet.</p>
+                  <p className="text-sm text-slate-500">You have not enrolled in any public courses yet.</p>
                 ) : (
                   <div className="space-y-4">
                     {data.enrolments.map((enr) => {
@@ -566,24 +895,81 @@ export function MemberDashboard({
                                 Certificate: {enr.certificate_code}
                               </span>
                             )}
+                            {enr.status === 'pending_payment' ? (
+                              <span className="inline-flex items-center gap-1 font-mono text-xs text-amber-600 dark:text-amber-400">
+                                <Lock className="w-3.5 h-3.5" /> Locked awaiting Pi payment verification
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleAccessEntitlement('course', enr.course_id)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold cursor-pointer"
+                              >
+                                <Unlock className="w-3.5 h-3.5" />
+                                <span>Access Course Materials</span>
+                              </button>
+                            )}
                           </div>
-                          <div className="space-y-2 border-t border-slate-200 dark:border-slate-800 pt-3">
-                            {syllabus.map((lesson, idx) => (
-                              <label key={lesson} className="flex items-center gap-2.5 text-sm cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={completed.includes(idx)}
-                                  onChange={() => handleToggleLesson(enr.course_id, completed, idx)}
-                                />
-                                <span>{lesson}</span>
-                              </label>
-                            ))}
-                          </div>
+                          {enr.status !== 'pending_payment' && (
+                            <div className="space-y-2 border-t border-slate-200 dark:border-slate-800 pt-3">
+                              {syllabus.map((lesson, idx) => (
+                                <label key={lesson} className="flex items-center gap-2.5 text-sm cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={completed.includes(idx)}
+                                    onChange={() => handleToggleLesson(enr.course_id, completed, idx)}
+                                  />
+                                  <span>{lesson}</span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
                 )}
+
+                {/* Guardian Ward Oversight Summary (shown when linked as a Parent/Guardian) */}
+                {data.guardianWards && data.guardianWards.length > 0 && (
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-3">
+                    <h3 className="font-display font-bold text-base text-slate-950 dark:text-white">
+                      Guardian Oversight: Enrolled Wards
+                    </h3>
+                    <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                      {data.guardianWards.map((w) => (
+                        <div key={`${w.school_id}-${w.student_user_id}`} className="py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                          <div>
+                            <div className="font-semibold text-sm text-slate-900 dark:text-white">{w.student_name}</div>
+                            <div className="text-slate-500">{w.school_name}</div>
+                          </div>
+                          <div className="font-mono text-slate-700 dark:text-amber-400">
+                            Attendance: {w.present_count}/{w.attendance_total} · Avg Grade: {w.avg_score !== null ? `${w.avg_score}%` : '—'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Institutional & Teacher/Student School Portal Embedded Directly */}
+                <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
+                  <SchoolManagementPortal
+                    user={user}
+                    language={language}
+                    portalMode={
+                      user.roles.includes('teacher')
+                        ? 'teacher'
+                        : user.roles.includes('guardian')
+                          ? 'guardian'
+                          : user.roles.includes('student')
+                            ? 'student'
+                            : 'admin'
+                    }
+                    onRequireAuth={() => onOpenDivision('academy', 'schools')}
+                    onLaunchProfessor={() => onOpenDivision('academy', 'professor')}
+                  />
+                </div>
               </div>
             )}
 
@@ -682,34 +1068,110 @@ export function MemberDashboard({
             )}
 
             {tab === 'orders' && (
-              <div className="space-y-4">
-                <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
-                  Marketplace Orders & Seller Storefront
-                </h2>
-                {data.orders.length === 0 ? (
-                  <p className="text-sm text-slate-500">No marketplace or platform orders yet.</p>
-                ) : (
-                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B]">
-                    <table className="w-full text-left text-xs">
-                      <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
-                        <tr>
-                          <th className="py-3 px-4">Order</th>
-                          <th className="py-3 px-4">Item</th>
-                          <th className="py-3 px-4 text-right">Total (π)</th>
-                          <th className="py-3 px-4">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                        {data.orders.map((o) => (
-                          <tr key={o.id}>
-                            <td className="py-3 px-4 font-mono">#{o.id}</td>
-                            <td className="py-3 px-4">{o.item_title}</td>
-                            <td className="py-3 px-4 text-right font-mono tabular-nums">{o.total_pi} π</td>
-                            <td className="py-3 px-4 font-mono uppercase">{o.status}</td>
+              <div className="space-y-8">
+                <div className="space-y-4">
+                  <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                    My Orders & Automatic Digital Content Unlocks
+                  </h2>
+                  {data.orders.length === 0 ? (
+                    <p className="text-sm text-slate-500">No marketplace or platform orders yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B]">
+                      <table className="w-full text-left text-xs">
+                        <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                          <tr>
+                            <th className="py-3 px-4">Order</th>
+                            <th className="py-3 px-4">Item</th>
+                            <th className="py-3 px-4 text-right">Total (π)</th>
+                            <th className="py-3 px-4">Payment</th>
+                            <th className="py-3 px-4">Access / Fulfillment</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                          {data.orders.map((o) => (
+                            <tr key={o.id}>
+                              <td className="py-3 px-4 font-mono">#{o.id}</td>
+                              <td className="py-3 px-4">{o.item_title}</td>
+                              <td className="py-3 px-4 text-right font-mono tabular-nums">{o.total_pi} π</td>
+                              <td className="py-3 px-4 font-mono uppercase">{o.status}</td>
+                              <td className="py-3 px-4">
+                                {(o.order_type === 'product' || o.order_type === 'course') ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAccessEntitlement(o.order_type as 'product' | 'course', o.reference_id)}
+                                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold cursor-pointer ${
+                                      o.status === 'paid' || o.status === 'fulfilled'
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                                    }`}
+                                  >
+                                    {o.status === 'paid' || o.status === 'fulfilled' ? (
+                                      <>
+                                        <Unlock className="w-3 h-3" /> <span>Access Content</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Lock className="w-3 h-3" /> <span>Locked (Verify Pi)</span>
+                                      </>
+                                    )}
+                                  </button>
+                                ) : (
+                                  <span className="font-mono text-[11px] uppercase text-slate-500">
+                                    {o.fulfillment_status || o.status}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {data.sellerOrders && data.sellerOrders.length > 0 && (
+                  <div className="space-y-4">
+                    <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                      Seller Order Fulfillment (Verified Pi Paid Only)
+                    </h2>
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B]">
+                      <table className="w-full text-left text-xs">
+                        <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                          <tr>
+                            <th className="py-3 px-4">Order</th>
+                            <th className="py-3 px-4">Buyer</th>
+                            <th className="py-3 px-4">Item</th>
+                            <th className="py-3 px-4">Payment Status</th>
+                            <th className="py-3 px-4 text-right">Fulfillment</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                          {data.sellerOrders.map((so) => (
+                            <tr key={so.id}>
+                              <td className="py-3 px-4 font-mono">#{so.id}</td>
+                              <td className="py-3 px-4">{so.buyer_name}</td>
+                              <td className="py-3 px-4">{so.item_title}</td>
+                              <td className="py-3 px-4 font-mono uppercase">{so.status}</td>
+                              <td className="py-3 px-4 text-right">
+                                {so.status === 'paid' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleFulfillOrder(so.id)}
+                                    className="px-3 py-1 rounded bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 font-semibold cursor-pointer"
+                                  >
+                                    Mark Fulfilled
+                                  </button>
+                                ) : (
+                                  <span className="font-mono text-[11px] uppercase text-slate-500">
+                                    {so.status === 'fulfilled' ? 'Fulfilled' : 'Locked until paid'}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>
@@ -852,7 +1314,7 @@ export function MemberDashboard({
                           onClick={() => handleSubscribe(plan.slug)}
                           className="w-full py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
                         >
-                          Subscribe with Pi
+                          PAY WITH PI (Testnet)
                         </button>
                       </div>
                     ))}
@@ -976,6 +1438,28 @@ export function MemberDashboard({
               </div>
             )}
           </>
+        )}
+
+        {unlockedModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
+            <div className="w-full max-w-lg rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Unlock className="w-4 h-4 text-emerald-600" />
+                  <h3 className="font-display font-bold text-slate-950 dark:text-white">{unlockedModal.title}</h3>
+                </div>
+                <button type="button" onClick={() => setUnlockedModal(null)} className="cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="rounded-lg bg-slate-50 dark:bg-[#081024] border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words">
+                {unlockedModal.content}
+              </div>
+              <p className="text-[11px] font-mono text-slate-500">
+                Server-verified Pi entitlement unlocked at: {unlockedModal.unlockedAt}
+              </p>
+            </div>
+          </div>
         )}
       </main>
     </div>

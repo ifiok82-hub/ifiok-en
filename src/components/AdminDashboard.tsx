@@ -2,10 +2,12 @@ import {
   Activity,
   ArrowLeft,
   BookOpen,
+  Bot,
   Building2,
   Database,
   FileWarning,
   Lock,
+  PlusCircle,
   Settings,
   ShieldAlert,
   ShoppingBag,
@@ -14,12 +16,14 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api.ts';
-import type { AppView, UserProfile } from '../types/platform.ts';
+import type { AiProviderStatus, AppView, UserProfile } from '../types/platform.ts';
 
 type AdminTab =
   | 'analytics'
   | 'members'
   | 'approvals'
+  | 'ai'
+  | 'publisher'
   | 'moderation'
   | 'finance'
   | 'settings'
@@ -42,6 +46,8 @@ interface AdminOverviewData {
     pendingProducts: number;
     pendingOpportunities: number;
     pendingServices: number;
+    pendingSchools?: number;
+    openSafetyReports?: number;
     openDisputes: number;
     completedPaymentsCount: number;
     completedVolumePi: number;
@@ -67,12 +73,14 @@ interface AdminOverviewData {
   products: Array<Record<string, unknown>>;
   opportunities: Array<Record<string, unknown>>;
   services: Array<Record<string, unknown>>;
+  schools?: Array<Record<string, unknown>>;
   communityPosts: Array<Record<string, unknown>>;
   transactions: Array<Record<string, unknown>>;
   subscriptions: Array<Record<string, unknown>>;
   disputes: Array<Record<string, unknown>>;
   auditLogs: Array<Record<string, unknown>>;
   securityEvents: Array<Record<string, unknown>>;
+  securityAlerts: Array<Record<string, unknown>>;
   backupFiles: string[];
 }
 
@@ -83,12 +91,60 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
   const [notice, setNotice] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [settingsForm, setSettingsForm] = useState<Record<string, string>>({});
 
+  // Verified Publisher form state
+  const [pubType, setPubType] = useState<'product' | 'course' | 'business' | 'opportunity'>('product');
+  const [pubTitle, setPubTitle] = useState('');
+  const [pubCategory, setPubCategory] = useState('Electronics & Tech');
+  const [pubSubType, setPubSubType] = useState('digital');
+  const [pubPricePi, setPubPricePi] = useState('5');
+  const [pubStock, setPubStock] = useState('10');
+  const [pubDescription, setPubDescription] = useState('');
+  const [pubSourceOrigin, setPubSourceOrigin] = useState('Authorized Supplier Feed');
+  const [pubSourceUrl, setPubSourceUrl] = useState('');
+  const [pubImageUrl, setPubImageUrl] = useState('');
+  const [pubLockedPayload, setPubLockedPayload] = useState('');
+  const [pubExtraOrg, setPubExtraOrg] = useState('');
+  const [pubDeadline, setPubDeadline] = useState('2026-12-31');
+  const [uploadingPubImg, setUploadingPubImg] = useState(false);
+
+  // AI Governance & Monitoring state
+  const [aiMonitor, setAiMonitor] = useState<{
+    status: AiProviderStatus;
+    config: {
+      provider: 'gemini' | 'openai_compatible';
+      model: string;
+      dailyUserLimit: number;
+      monthlyCostCapUsd: number;
+      childSafetyMode: 'strict' | 'standard';
+    };
+    summary: Record<string, number>;
+    recentLogs: Array<Record<string, unknown>>;
+    safetyReports: Array<Record<string, unknown>>;
+  } | null>(null);
+  const [testingAi, setTestingAi] = useState(false);
+
   const loadAdmin = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiRequest<AdminOverviewData>('/api/admin/overview');
+      const [res, aiRes] = await Promise.all([
+        apiRequest<AdminOverviewData>('/api/admin/overview'),
+        apiRequest<{
+          status: AiProviderStatus;
+          config: {
+            provider: 'gemini' | 'openai_compatible';
+            model: string;
+            dailyUserLimit: number;
+            monthlyCostCapUsd: number;
+            childSafetyMode: 'strict' | 'standard';
+          };
+          summary: Record<string, number>;
+          recentLogs: Array<Record<string, unknown>>;
+          safetyReports: Array<Record<string, unknown>>;
+        }>('/api/academy/ai/admin/monitoring').catch(() => null),
+      ]);
       setData(res);
       setSettingsForm(res.settings);
+      if (aiRes) setAiMonitor(aiRes);
     } catch (err) {
       setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Unable to load admin console.' });
     } finally {
@@ -114,6 +170,84 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
     }
   };
 
+  const handleUploadPubImage = async (file: File) => {
+    setUploadingPubImg(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read image file.'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiRequest<{ url: string }>('/api/uploads/image', {
+        method: 'POST',
+        body: JSON.stringify({ dataBase64: base64 }),
+      });
+      setPubImageUrl(res.url);
+      setNotice({ type: 'ok', text: 'Verified image scanned and uploaded.' });
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Image upload rejected.' });
+    } finally {
+      setUploadingPubImg(false);
+    }
+  };
+
+  const handlePublishVerified = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload: Record<string, unknown> = {
+      entityType: pubType,
+      sourceOrigin: pubSourceOrigin,
+      sourceUrl: pubSourceUrl,
+      availabilityStatus: 'available',
+      imageUrl: pubImageUrl,
+    };
+    if (pubType === 'product') {
+      Object.assign(payload, {
+        title: pubTitle,
+        category: pubCategory,
+        productType: pubSubType,
+        pricePi: Number(pubPricePi),
+        stockQty: Number(pubStock) || 1,
+        description: pubDescription,
+        lockedContent: pubLockedPayload,
+      });
+    } else if (pubType === 'course') {
+      Object.assign(payload, {
+        title: pubTitle,
+        category: pubCategory,
+        level: pubSubType || 'Intermediate',
+        durationHours: Number(pubStock) || 8,
+        pricePi: Number(pubPricePi) || 0,
+        description: pubDescription,
+        lockedMaterials: pubLockedPayload,
+      });
+    } else if (pubType === 'business') {
+      Object.assign(payload, {
+        businessName: pubTitle,
+        sector: pubCategory,
+        country: pubExtraOrg || 'Global',
+        website: pubSourceUrl,
+        summary: pubDescription,
+        servicesOffered: pubSubType,
+      });
+    } else {
+      Object.assign(payload, {
+        title: pubTitle,
+        opportunityType: pubSubType || 'job',
+        organizationName: pubExtraOrg,
+        location: pubCategory || 'Global / Remote',
+        deadline: pubDeadline,
+        description: pubDescription,
+      });
+    }
+
+    await mutate('/api/admin/import-verified', 'POST', payload, `Verified ${pubType} published with provenance timestamp.`);
+    setPubTitle('');
+    setPubDescription('');
+    setPubLockedPayload('');
+    setPubImageUrl('');
+  };
+
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     await mutate('/api/admin/settings', 'PATCH', { settings: settingsForm }, 'Platform settings & content saved.');
@@ -123,14 +257,33 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
     await mutate('/api/admin/backups/snapshot', 'POST', undefined, 'Database snapshot backup created.');
   };
 
+  const handleTestAiProvider = async () => {
+    setTestingAi(true);
+    try {
+      const res = await apiRequest<{ result: { ok: boolean; message: string; latencyMs: number } }>(
+        '/api/academy/ai/admin/test',
+        { method: 'POST' }
+      );
+      setNotice({ type: 'ok', text: `${res.result.message} (${res.result.latencyMs}ms)` });
+      await loadAdmin();
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'AI provider live test failed.' });
+      await loadAdmin();
+    } finally {
+      setTestingAi(false);
+    }
+  };
+
   const navItems: Array<{ id: AdminTab; label: string; icon: typeof Activity }> = [
     { id: 'analytics', label: 'Analytics', icon: Activity },
     { id: 'members', label: 'Members & Roles', icon: Users },
     { id: 'approvals', label: 'Verifications & Approvals', icon: Building2 },
+    { id: 'ai', label: 'AI Governance & Safety', icon: Bot },
+    { id: 'publisher', label: 'Verified Publisher', icon: PlusCircle },
     { id: 'moderation', label: 'Community & Disputes', icon: FileWarning },
     { id: 'finance', label: 'Transactions & Subs', icon: ShoppingBag },
     { id: 'settings', label: 'Content & Commissions', icon: Settings },
-    { id: 'security', label: 'Security & Audit Logs', icon: ShieldAlert },
+    { id: 'security', label: 'Security & Alerts', icon: ShieldAlert },
     { id: 'backups', label: 'Database Backups', icon: Database },
   ];
 
@@ -331,7 +484,7 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                 />
 
                 <ApprovalSection
-                  title="Academy Courses Queue"
+                  title="IFIOK SCHOOL Courses Queue"
                   icon={BookOpen}
                   items={data.courses}
                   renderTitle={(c) => `${String(c.title)} — ${String(c.price_pi)} π (${String(c.instructor_name)})`}
@@ -377,6 +530,16 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                 />
 
                 <ApprovalSection
+                  title="Global Schools & Institutions Verification Queue"
+                  icon={Building2}
+                  items={data.schools || []}
+                  renderTitle={(s) => `${String(s.name)} — ${String(s.school_type)} (${String(s.country)})`}
+                  renderStatus={(s) => String(s.verification_status)}
+                  onApprove={(id) => mutate(`/api/admin/schools/${id}`, 'PATCH', { verificationStatus: 'verified' })}
+                  onReject={(id) => mutate(`/api/admin/schools/${id}`, 'PATCH', { verificationStatus: 'rejected' })}
+                />
+
+                <ApprovalSection
                   title="Freelance Services Queue"
                   icon={Users}
                   items={data.services}
@@ -386,6 +549,437 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   onReject={(id) => mutate(`/api/admin/services/${id}`, 'PATCH', { approvalStatus: 'rejected' })}
                 />
               </div>
+            )}
+
+            {tab === 'ai' && (
+              <div className="space-y-6">
+                {!aiMonitor ? (
+                  <p className="text-sm text-slate-500">AI governance telemetry unavailable.</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                      {[
+                        { label: 'Provider Status', val: aiMonitor.status.operational ? 'OPERATIONAL' : aiMonitor.status.lastTestedStatus.toUpperCase() },
+                        { label: 'Total AI Calls', val: aiMonitor.summary.totalCalls ?? 0 },
+                        { label: 'Safety Blocks', val: aiMonitor.summary.safetyBlocks ?? 0 },
+                        { label: 'Est. Monthly Cost', val: `$${Number(aiMonitor.status.monthlyEstimatedCostUsd || 0).toFixed(4)}` },
+                      ].map((stat) => (
+                        <div key={stat.label} className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-4">
+                          <div className="font-mono font-bold text-lg text-slate-950 dark:text-white">{stat.val}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">{stat.label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4 max-w-3xl">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                            IFIOK Professor AI Provider Governance
+                          </h2>
+                          <p className="text-xs text-slate-500">
+                            Credentials are managed exclusively via server environment variables (GEMINI_API_KEY / OPENAI_COMPAT_API_KEY). Switch models, set daily student rate limits, enforce monthly cost caps, and run live server connectivity checks below.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={testingAi}
+                          onClick={handleTestAiProvider}
+                          className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
+                        >
+                          {testingAi ? 'Testing Connection...' : 'Test Live Provider'}
+                        </button>
+                      </div>
+
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          mutate('/api/academy/ai/admin/config', 'PATCH', aiMonitor.config, 'AI Governance settings updated.');
+                        }}
+                        className="space-y-3"
+                      >
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Active Provider Adapter</label>
+                            <select
+                              value={aiMonitor.config.provider}
+                              onChange={(e) =>
+                                setAiMonitor((p) =>
+                                  p ? { ...p, config: { ...p.config, provider: e.target.value as 'gemini' | 'openai_compatible' } } : p
+                                )
+                              }
+                              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                            >
+                              {aiMonitor.status.availableProviders.map((prov) => (
+                                <option key={prov.id} value={prov.id}>
+                                  {prov.label} ({prov.configured ? 'Server Env Ready' : 'Env Key Missing'})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Model Identifier</label>
+                            <input
+                              type="text"
+                              required
+                              value={aiMonitor.config.model}
+                              onChange={(e) =>
+                                setAiMonitor((p) => (p ? { ...p, config: { ...p.config, model: e.target.value } } : p))
+                              }
+                              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Daily Student Rate Limit (Prompts/Day)</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={500}
+                              value={aiMonitor.config.dailyUserLimit}
+                              onChange={(e) =>
+                                setAiMonitor((p) =>
+                                  p ? { ...p, config: { ...p.config, dailyUserLimit: Number(e.target.value) } } : p
+                                )
+                              }
+                              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Monthly Cost Cap (USD)</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={5000}
+                              value={aiMonitor.config.monthlyCostCapUsd}
+                              onChange={(e) =>
+                                setAiMonitor((p) =>
+                                  p ? { ...p, config: { ...p.config, monthlyCostCapUsd: Number(e.target.value) } } : p
+                                )
+                              }
+                              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Child Protection & Safety Filter Mode</label>
+                          <select
+                            value={aiMonitor.config.childSafetyMode}
+                            onChange={(e) =>
+                              setAiMonitor((p) =>
+                                p
+                                  ? { ...p, config: { ...p.config, childSafetyMode: e.target.value as 'strict' | 'standard' } }
+                                  : p
+                              )
+                            }
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                          >
+                            <option value="strict">Strict Child-Safe Filtering (Recommended)</option>
+                            <option value="standard">Standard Educational Filtering</option>
+                          </select>
+                        </div>
+                        <button
+                          type="submit"
+                          className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                        >
+                          Save AI Governance Policy
+                        </button>
+                      </form>
+                    </div>
+
+                    <div className="space-y-3">
+                      <h3 className="font-display font-bold text-base">Student Safety & AI Reports</h3>
+                      {aiMonitor.safetyReports.length === 0 ? (
+                        <p className="text-xs text-slate-500">No child safety or AI reports filed.</p>
+                      ) : (
+                        <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-[#0D152B]">
+                          {aiMonitor.safetyReports.map((rep) => (
+                            <div key={String(rep.id)} className="p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+                              <div>
+                                <div className="font-semibold text-sm">{String(rep.reason)}</div>
+                                <div className="text-slate-500">
+                                  Reporter: {String(rep.reporter_name)} · Context: {String(rep.context_type)} · Status: {String(rep.status)}
+                                </div>
+                                <p className="text-slate-600 dark:text-slate-300 mt-1">{String(rep.details)}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  mutate(`/api/academy/ai/admin/safety-reports/${rep.id}`, 'PATCH', { status: 'resolved' })
+                                }
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer"
+                              >
+                                Mark Resolved
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {tab === 'publisher' && (
+              <form
+                onSubmit={handlePublishVerified}
+                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4 max-w-3xl"
+              >
+                <div>
+                  <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                    Verified Inventory & Authorized Feed Publisher
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Publish only genuine owned inventory, authorized supplier feeds, confirmed institutional opportunities, or accredited curricula with recorded source provenance.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Catalog Type</label>
+                    <select
+                      value={pubType}
+                      onChange={(e) => {
+                        const next = e.target.value as typeof pubType;
+                        setPubType(next);
+                        if (next === 'product') {
+                          setPubCategory('Electronics & Tech');
+                          setPubSubType('digital');
+                        } else if (next === 'course') {
+                          setPubCategory('Web3 & Blockchain');
+                          setPubSubType('Intermediate');
+                        } else if (next === 'business') {
+                          setPubCategory('Technology & Consulting');
+                          setPubSubType('Enterprise Services');
+                        } else {
+                          setPubCategory('Global / Remote');
+                          setPubSubType('job');
+                        }
+                      }}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    >
+                      <option value="product">IFIOK Market Product</option>
+                      <option value="course">IFIOK SCHOOL Course</option>
+                      <option value="business">Verified Business Hub SME</option>
+                      <option value="opportunity">Confirmed Opportunity / Grant</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Source Origin (Mandatory Provenance)</label>
+                    <input
+                      type="text"
+                      required
+                      minLength={3}
+                      value={pubSourceOrigin}
+                      onChange={(e) => setPubSourceOrigin(e.target.value)}
+                      placeholder="IFIOK-EN Inventory / Authorized Supplier"
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">
+                      {pubType === 'business' ? 'Registered Business Name' : 'Listing Title'}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      minLength={3}
+                      value={pubTitle}
+                      onChange={(e) => setPubTitle(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">
+                      {pubType === 'business'
+                        ? 'Sector'
+                        : pubType === 'opportunity'
+                          ? 'Location'
+                          : 'Category'}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={pubCategory}
+                      onChange={(e) => setPubCategory(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">
+                      {pubType === 'product'
+                        ? 'Product Type'
+                        : pubType === 'course'
+                          ? 'Level'
+                          : pubType === 'opportunity'
+                            ? 'Opportunity Type'
+                            : 'Services Offered'}
+                    </label>
+                    {pubType === 'product' ? (
+                      <select
+                        value={pubSubType}
+                        onChange={(e) => setPubSubType(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        <option value="digital">Digital Product</option>
+                        <option value="physical">Physical Product</option>
+                        <option value="service">Digital Service</option>
+                        <option value="web3">Web3 Product</option>
+                        <option value="pi_app">Verified Pi App</option>
+                        <option value="gaming_asset">Gaming Asset</option>
+                      </select>
+                    ) : pubType === 'opportunity' ? (
+                      <select
+                        value={pubSubType}
+                        onChange={(e) => setPubSubType(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        <option value="job">Job</option>
+                        <option value="internship">Internship</option>
+                        <option value="scholarship">Scholarship</option>
+                        <option value="grant">Grant</option>
+                        <option value="partnership">Partnership</option>
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={pubSubType}
+                        onChange={(e) => setPubSubType(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      />
+                    )}
+                  </div>
+
+                  {(pubType === 'product' || pubType === 'course') && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium mb-1">Pi Price (π)</label>
+                        <input
+                          type="number"
+                          min={pubType === 'course' ? 0 : 0.1}
+                          step="0.1"
+                          value={pubPricePi}
+                          onChange={(e) => setPubPricePi(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium mb-1">
+                          {pubType === 'product' ? 'Verified Stock Qty' : 'Duration (Hours)'}
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={pubStock}
+                          onChange={(e) => setPubStock(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {(pubType === 'business' || pubType === 'opportunity') && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium mb-1">
+                          {pubType === 'business' ? 'Country' : 'Issuing Organization'}
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={pubExtraOrg}
+                          onChange={(e) => setPubExtraOrg(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                        />
+                      </div>
+                      {pubType === 'opportunity' && (
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Deadline</label>
+                          <input
+                            type="date"
+                            required
+                            value={pubDeadline}
+                            onChange={(e) => setPubDeadline(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium mb-1">Source Reference URL (Optional)</label>
+                  <input
+                    type="url"
+                    value={pubSourceUrl}
+                    onChange={(e) => setPubSourceUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                  />
+                </div>
+
+                {(pubType === 'product' || pubType === 'course') && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">
+                        Verified Image Upload (PNG/JPEG/WEBP, scanned server-side)
+                      </label>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleUploadPubImage(f);
+                          }}
+                          className="text-xs"
+                        />
+                        {uploadingPubImg && <span className="text-xs text-slate-500">Scanning...</span>}
+                        {pubImageUrl && <span className="font-mono text-xs text-emerald-600">{pubImageUrl}</span>}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium mb-1">
+                        Locked Digital Content / Course Materials (AES-256 encrypted, unlocked ONLY after Pi completion)
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={pubLockedPayload}
+                        onChange={(e) => setPubLockedPayload(e.target.value)}
+                        placeholder="Download URLs, license instructions, or protected curriculum syllabus..."
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-medium mb-1">Verified Description / Summary</label>
+                  <textarea
+                    rows={4}
+                    required
+                    minLength={15}
+                    value={pubDescription}
+                    onChange={(e) => setPubDescription(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                >
+                  Publish Verified Entry
+                </button>
+              </form>
             )}
 
             {tab === 'moderation' && (
@@ -631,6 +1225,46 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
 
             {tab === 'security' && (
               <div className="space-y-8">
+                <div>
+                  <h2 className="font-display font-bold text-lg mb-3">Automated Security & Fraud Alerts</h2>
+                  {data.securityAlerts.length === 0 ? (
+                    <p className="text-sm text-slate-500">No security alerts active.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {data.securityAlerts.map((al) => (
+                        <div
+                          key={String(al.id)}
+                          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-4 flex flex-wrap items-center justify-between gap-4"
+                        >
+                          <div className="space-y-1 max-w-2xl">
+                            <div className="text-xs font-mono uppercase text-amber-600 dark:text-amber-400">
+                              {String(al.severity)} · {String(al.alert_type)} · Status: {String(al.status)}
+                            </div>
+                            <p className="text-sm text-slate-800 dark:text-slate-200">{String(al.summary)}</p>
+                            <div className="text-[11px] font-mono text-slate-500">{String(al.created_at)}</div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => mutate(`/api/admin/security-alerts/${al.id}`, 'PATCH', { status: 'acknowledged' })}
+                              className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                            >
+                              Acknowledge
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => mutate(`/api/admin/security-alerts/${al.id}`, 'PATCH', { status: 'resolved' })}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
+                            >
+                              Resolve
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <h2 className="font-display font-bold text-lg mb-3">Security Events</h2>
                   <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B]">

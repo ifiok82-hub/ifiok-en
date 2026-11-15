@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import { db, getSettingsMap } from '../db.ts';
+import { encryptSensitive, sanitizeHttpUrl } from '../lib/crypto.ts';
 import {
   assignRole,
   createNotification,
@@ -16,7 +17,10 @@ router.get('/public-summary', (_req, res) => {
   const settings = getSettingsMap();
 
   const courses = db.prepare(`
-    SELECT c.*, u.full_name as instructor_name, i.headline as instructor_headline
+    SELECT c.id, c.instructor_id, c.title, c.slug, c.category, c.level, c.duration_hours, c.price_pi,
+           c.syllabus_json, c.description, c.image_url, c.approval_status, c.is_featured,
+           c.source_origin, c.source_url, c.availability_status, c.last_verified_at, c.created_at,
+           u.full_name as instructor_name, i.headline as instructor_headline
     FROM courses c
     JOIN instructors i ON i.id = c.instructor_id
     JOIN users u ON u.id = i.user_id
@@ -26,7 +30,9 @@ router.get('/public-summary', (_req, res) => {
   `).all();
 
   const businesses = db.prepare(`
-    SELECT b.*, u.full_name as owner_name
+    SELECT b.id, b.owner_user_id, b.business_name, b.sector, b.country, b.website, b.summary, b.services_offered,
+           b.verification_status, b.is_featured, b.source_origin, b.source_url, b.availability_status, b.last_verified_at, b.created_at,
+           u.full_name as owner_name
     FROM business_profiles b
     JOIN users u ON u.id = b.owner_user_id
     WHERE b.verification_status = 'verified'
@@ -44,7 +50,9 @@ router.get('/public-summary', (_req, res) => {
   `).all();
 
   const products = db.prepare(`
-    SELECT p.*, s.store_name, s.country as seller_country, s.verification_status as seller_verified
+    SELECT p.id, p.seller_id, p.title, p.category, p.product_type, p.description, p.price_pi, p.stock_qty,
+           p.image_url, p.approval_status, p.source_origin, p.source_url, p.availability_status, p.last_verified_at, p.created_at,
+           s.store_name, s.country as seller_country, s.verification_status as seller_verified
     FROM products p
     JOIN sellers s ON s.id = p.seller_id
     WHERE p.approval_status = 'approved' AND s.verification_status = 'verified'
@@ -104,13 +112,70 @@ router.get('/public-summary', (_req, res) => {
   });
 });
 
+// Global cross-division search endpoint
+router.get('/search', (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+  if (!q || q.length < 2) {
+    return res.json({ query: q, results: [] });
+  }
+  const like = `%${q}%`;
+
+  const products = db.prepare(`
+    SELECT p.id, p.title, p.category as subtitle, p.price_pi as pricePi, p.source_origin, 'market' as division
+    FROM products p JOIN sellers s ON s.id = p.seller_id
+    WHERE p.approval_status = 'approved' AND s.verification_status = 'verified'
+      AND (LOWER(p.title) LIKE ? OR LOWER(p.description) LIKE ? OR LOWER(p.category) LIKE ?)
+    LIMIT 8
+  `).all(like, like, like) as Array<Record<string, unknown>>;
+
+  const courses = db.prepare(`
+    SELECT id, title, category as subtitle, price_pi as pricePi, source_origin, 'academy' as division
+    FROM courses WHERE approval_status = 'approved'
+      AND (LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(category) LIKE ?)
+    LIMIT 8
+  `).all(like, like, like) as Array<Record<string, unknown>>;
+
+  const businesses = db.prepare(`
+    SELECT id, business_name as title, sector || ' · ' || country as subtitle, NULL as pricePi, source_origin, 'business' as division
+    FROM business_profiles WHERE verification_status = 'verified'
+      AND (LOWER(business_name) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(sector) LIKE ?)
+    LIMIT 8
+  `).all(like, like, like) as Array<Record<string, unknown>>;
+
+  const services = db.prepare(`
+    SELECT id, title, category as subtitle, price_pi as pricePi, source_origin, 'freelance' as division
+    FROM freelance_services WHERE approval_status = 'approved'
+      AND (LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(category) LIKE ?)
+    LIMIT 8
+  `).all(like, like, like) as Array<Record<string, unknown>>;
+
+  const opportunities = db.prepare(`
+    SELECT id, title, opportunity_type || ' · ' || organization_name as subtitle, NULL as pricePi, source_origin, 'opportunities' as division
+    FROM opportunities WHERE approval_status = 'approved'
+      AND (LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(organization_name) LIKE ?)
+    LIMIT 8
+  `).all(like, like, like) as Array<Record<string, unknown>>;
+
+  res.json({
+    query: q,
+    results: [...products, ...courses, ...businesses, ...services, ...opportunities],
+  });
+});
+
 // ================= ACADEMY =================
 router.get('/courses', optionalAuth, (req, res) => {
   const category = typeof req.query.category === 'string' ? req.query.category.trim() : '';
+  const subject = typeof req.query.subject === 'string' ? req.query.subject.trim() : '';
+  const language = typeof req.query.language === 'string' ? req.query.language.trim() : '';
   const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
 
   const rows = db.prepare(`
-    SELECT c.*, u.full_name as instructor_name, i.headline as instructor_headline, i.user_id as instructor_user_id,
+    SELECT c.id, c.instructor_id, c.title, c.slug, c.category, c.subject, c.language_code, c.issuing_organization, c.school_id,
+           c.level, c.duration_hours, c.price_pi,
+           c.syllabus_json, c.description, c.image_url, c.approval_status, c.is_featured,
+           c.source_origin, c.source_url, c.availability_status, c.last_verified_at, c.created_at,
+           (CASE WHEN length(COALESCE(c.locked_materials_enc, '')) > 0 THEN 1 ELSE 0 END) as has_locked_content,
+           u.full_name as instructor_name, i.headline as instructor_headline, i.user_id as instructor_user_id,
       (SELECT ROUND(AVG(r.rating), 1) FROM reviews r WHERE r.target_type = 'course' AND r.target_id = c.id AND r.moderation_status = 'approved') as avg_rating,
       (SELECT COUNT(*) FROM reviews r WHERE r.target_type = 'course' AND r.target_id = c.id AND r.moderation_status = 'approved') as review_count
     FROM courses c
@@ -123,8 +188,10 @@ router.get('/courses', optionalAuth, (req, res) => {
 
   const filtered = rows.filter((row) => {
     if (category && category !== 'All' && row.category !== category) return false;
+    if (subject && subject !== 'All' && row.subject !== subject && row.category !== subject) return false;
+    if (language && language !== 'all' && row.language_code !== language) return false;
     if (q) {
-      const hay = `${row.title} ${row.description} ${row.category} ${row.instructor_name}`.toLowerCase();
+      const hay = `${row.title} ${row.description} ${row.category} ${row.subject || ''} ${row.instructor_name}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -202,14 +269,110 @@ router.post('/courses', requireAuth, (req, res) => {
 
   const slug = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50)}-${crypto.randomBytes(3).toString('hex')}`;
   const approvalStatus = isAdmin ? 'approved' : 'pending';
+  const sourceOrigin = typeof req.body?.sourceOrigin === 'string' && req.body.sourceOrigin.trim()
+    ? req.body.sourceOrigin.trim().slice(0, 120)
+    : 'Authorized Educational Material';
+  const sourceUrl = sanitizeHttpUrl(req.body?.sourceUrl);
+  const imageUrl = sanitizeHttpUrl(req.body?.imageUrl) || (typeof req.body?.imageUrl === 'string' && req.body.imageUrl.startsWith('/api/uploads/') ? req.body.imageUrl : '');
+  const lockedMaterials = typeof req.body?.lockedMaterials === 'string' ? req.body.lockedMaterials.trim() : '';
+  const subject = typeof req.body?.subject === 'string' && req.body.subject.trim() ? req.body.subject.trim().slice(0, 80) : category;
+  const languageCode = typeof req.body?.languageCode === 'string' && req.body.languageCode.trim() ? req.body.languageCode.trim().slice(0, 10) : 'en';
+  const issuingOrganization = typeof req.body?.issuingOrganization === 'string' && req.body.issuingOrganization.trim()
+    ? req.body.issuingOrganization.trim().slice(0, 120)
+    : 'IFIOK SCHOOL';
 
   const resIns = db.prepare(`
-    INSERT INTO courses (instructor_id, title, slug, category, level, duration_hours, price_pi, syllabus_json, description, approval_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(instructor.id, title, slug, category, level, durationHours, pricePi, JSON.stringify(syllabus), description, approvalStatus);
+    INSERT INTO courses (
+      instructor_id, title, slug, category, subject, language_code, issuing_organization,
+      level, duration_hours, price_pi, syllabus_json, description,
+      image_url, approval_status, source_origin, source_url, availability_status, last_verified_at, locked_materials_enc
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)
+  `).run(
+    instructor.id,
+    title,
+    slug,
+    category,
+    subject,
+    languageCode,
+    issuingOrganization,
+    level,
+    durationHours,
+    pricePi,
+    JSON.stringify(syllabus),
+    description,
+    imageUrl,
+    approvalStatus,
+    sourceOrigin,
+    sourceUrl,
+    isAdmin ? new Date().toISOString() : null,
+    encryptSensitive(lockedMaterials)
+  );
 
-  recordAudit(req.authUser!.id, 'course_created', 'course', Number(resIns.lastInsertRowid), req.ip || '', { approvalStatus });
+  recordAudit(req.authUser!.id, 'course_created', 'course', Number(resIns.lastInsertRowid), req.ip || '', { approvalStatus, sourceOrigin });
   return res.status(201).json({ id: Number(resIns.lastInsertRowid), approvalStatus });
+});
+
+router.get('/courses/:id/classroom', requireAuth, async (req, res) => {
+  const courseId = Number(req.params.id);
+  const course = db.prepare(`
+    SELECT c.id, c.title, c.category, c.subject, c.language_code, c.issuing_organization, c.level, c.duration_hours,
+           c.price_pi, c.syllabus_json, c.description, c.image_url, c.approval_status, c.locked_materials_enc,
+           u.full_name as instructor_name, i.user_id as instructor_user_id
+    FROM courses c
+    JOIN instructors i ON i.id = c.instructor_id
+    JOIN users u ON u.id = i.user_id
+    WHERE c.id = ?
+  `).get(courseId) as
+    | {
+        id: number;
+        title: string;
+        category: string;
+        subject: string;
+        language_code: string;
+        issuing_organization: string;
+        level: string;
+        duration_hours: number;
+        price_pi: number;
+        syllabus_json: string;
+        description: string;
+        image_url: string;
+        approval_status: string;
+        locked_materials_enc: string;
+        instructor_name: string;
+        instructor_user_id: number;
+      }
+    | undefined;
+
+  if (!course || (course.approval_status !== 'approved' && course.instructor_user_id !== req.authUser!.id)) {
+    return res.status(404).json({ error: 'Approved course not found.' });
+  }
+
+  const enrolment = db.prepare(`
+    SELECT id, progress_percent, completed_lessons_json, certificate_code, status, enrolled_at, completed_at
+    FROM enrolments WHERE user_id = ? AND course_id = ?
+  `).get(req.authUser!.id, courseId) as
+    | { id: number; progress_percent: number; completed_lessons_json: string; certificate_code: string | null; status: string; enrolled_at: string; completed_at: string | null }
+    | undefined;
+
+  const isFree = Number(course.price_pi) === 0;
+  const isOwnerOrAdmin = course.instructor_user_id === req.authUser!.id || req.authUser!.roles.includes('super_admin');
+  const ent = db.prepare(`
+    SELECT e.is_unlocked FROM entitlements e
+    JOIN orders o ON o.id = e.order_id
+    WHERE e.user_id = ? AND e.item_type = 'course' AND e.item_id = ? AND e.is_unlocked = 1 AND o.status IN ('paid', 'fulfilled')
+  `).get(req.authUser!.id, courseId) as { is_unlocked: number } | undefined;
+
+  const unlocked = Boolean(isFree || isOwnerOrAdmin || ent?.is_unlocked === 1);
+  const { decryptSensitive } = await import('../lib/crypto.ts');
+  const materials = unlocked && course.locked_materials_enc ? decryptSensitive(course.locked_materials_enc) : null;
+
+  const { locked_materials_enc: _omit, ...safeCourse } = course;
+  return res.json({
+    course: safeCourse,
+    enrolment: enrolment || null,
+    unlocked,
+    materials,
+  });
 });
 
 router.post('/enrolments/:courseId/progress', requireAuth, (req, res) => {
@@ -271,7 +434,8 @@ router.get('/certificates/verify/:code', (req, res) => {
 
   const row = db.prepare(`
     SELECT e.certificate_code, e.progress_percent, e.status, e.completed_at,
-           u.full_name as student_name, c.title as course_title, c.category, c.duration_hours,
+           u.full_name as student_name, c.title as course_title, c.category, c.subject,
+           c.issuing_organization, c.duration_hours,
            iu.full_name as instructor_name
     FROM enrolments e
     JOIN users u ON u.id = e.user_id
@@ -279,13 +443,21 @@ router.get('/certificates/verify/:code', (req, res) => {
     JOIN instructors i ON i.id = c.instructor_id
     JOIN users iu ON iu.id = i.user_id
     WHERE e.certificate_code = ? AND e.status = 'completed'
-  `).get(code);
+  `).get(code) as Record<string, unknown> | undefined;
 
   if (!row) {
     return res.status(404).json({ valid: false, error: 'No verified completed certificate matches that code.' });
   }
 
-  return res.json({ valid: true, certificate: row });
+  return res.json({
+    valid: true,
+    certificate: {
+      ...row,
+      issuing_organization: row.issuing_organization || 'IFIOK SCHOOL',
+      accreditation_note:
+        'Verified IFIOK SCHOOL course completion record. This record documents coursework completed on IFIOK SCHOOL and does not imply unverified government or university accreditation.',
+    },
+  });
 });
 
 // ================= BUSINESS HUB =================
@@ -294,7 +466,10 @@ router.get('/businesses', (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
 
   const rows = db.prepare(`
-    SELECT b.*, u.full_name as owner_name
+    SELECT b.id, b.owner_user_id, b.business_name, b.registration_number, b.sector, b.country, b.website,
+           b.summary, b.services_offered, b.verification_status, b.is_featured,
+           b.source_origin, b.source_url, b.availability_status, b.last_verified_at, b.created_at,
+           u.full_name as owner_name
     FROM business_profiles b
     JOIN users u ON u.id = b.owner_user_id
     WHERE b.verification_status = 'verified'
@@ -318,9 +493,13 @@ router.post('/businesses', requireAuth, (req, res) => {
   const registrationNumber = typeof req.body?.registrationNumber === 'string' ? req.body.registrationNumber.trim() : '';
   const sector = typeof req.body?.sector === 'string' ? req.body.sector.trim() : '';
   const country = typeof req.body?.country === 'string' ? req.body.country.trim() : '';
-  const website = typeof req.body?.website === 'string' ? req.body.website.trim() : '';
+  const website = sanitizeHttpUrl(req.body?.website);
   const summary = typeof req.body?.summary === 'string' ? req.body.summary.trim() : '';
   const servicesOffered = typeof req.body?.servicesOffered === 'string' ? req.body.servicesOffered.trim() : '';
+  const sourceOrigin = typeof req.body?.sourceOrigin === 'string' && req.body.sourceOrigin.trim()
+    ? req.body.sourceOrigin.trim().slice(0, 120)
+    : 'Verified Business Submission';
+  const sourceUrl = sanitizeHttpUrl(req.body?.sourceUrl || req.body?.website);
 
   if (businessName.length < 2 || sector.length < 2 || country.length < 2 || summary.length < 15) {
     return res.status(400).json({ error: 'Business name, sector, country, and descriptive summary are required.' });
@@ -328,14 +507,31 @@ router.post('/businesses', requireAuth, (req, res) => {
 
   const isAdmin = req.authUser!.roles.includes('super_admin');
   const status = isAdmin ? 'verified' : 'pending';
+  const maskedReg = registrationNumber.length > 4 ? `***${registrationNumber.slice(-4)}` : registrationNumber;
 
   const ins = db.prepare(`
-    INSERT INTO business_profiles (owner_user_id, business_name, registration_number, sector, country, website, summary, services_offered, verification_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(req.authUser!.id, businessName, registrationNumber, sector, country, website, summary, servicesOffered, status);
+    INSERT INTO business_profiles (
+      owner_user_id, business_name, registration_number, registration_number_enc, sector, country, website,
+      summary, services_offered, verification_status, source_origin, source_url, availability_status, last_verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
+  `).run(
+    req.authUser!.id,
+    businessName,
+    maskedReg,
+    encryptSensitive(registrationNumber),
+    sector,
+    country,
+    website,
+    summary,
+    servicesOffered,
+    status,
+    sourceOrigin,
+    sourceUrl,
+    isAdmin ? new Date().toISOString() : null
+  );
 
   assignRole(req.authUser!.id, 'organisation', req.authUser!.id);
-  recordAudit(req.authUser!.id, 'business_submitted', 'business_profile', Number(ins.lastInsertRowid), req.ip || '', { status });
+  recordAudit(req.authUser!.id, 'business_submitted', 'business_profile', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin });
 
   return res.status(201).json({ id: Number(ins.lastInsertRowid), verificationStatus: status });
 });
@@ -378,14 +574,19 @@ router.post('/services', requireAuth, (req, res) => {
 
   const isAdmin = req.authUser!.roles.includes('super_admin');
   const status = isAdmin ? 'approved' : 'pending';
+  const sourceOrigin = typeof req.body?.sourceOrigin === 'string' && req.body.sourceOrigin.trim()
+    ? req.body.sourceOrigin.trim().slice(0, 120)
+    : 'Verified Freelancer Listing';
 
   const ins = db.prepare(`
-    INSERT INTO freelance_services (freelancer_user_id, title, category, description, delivery_days, price_pi, approval_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(req.authUser!.id, title, category, description, deliveryDays, pricePi, status);
+    INSERT INTO freelance_services (
+      freelancer_user_id, title, category, description, delivery_days, price_pi, approval_status,
+      source_origin, availability_status, last_verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
+  `).run(req.authUser!.id, title, category, description, deliveryDays, pricePi, status, sourceOrigin, isAdmin ? new Date().toISOString() : null);
 
   assignRole(req.authUser!.id, 'freelancer', req.authUser!.id);
-  recordAudit(req.authUser!.id, 'freelance_service_created', 'freelance_service', Number(ins.lastInsertRowid), req.ip || '', { status });
+  recordAudit(req.authUser!.id, 'freelance_service_created', 'freelance_service', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin });
 
   return res.status(201).json({ id: Number(ins.lastInsertRowid), approvalStatus: status });
 });
@@ -468,12 +669,17 @@ router.post('/opportunities', requireAuth, (req, res) => {
 
   const isAdmin = req.authUser!.roles.includes('super_admin');
   const status = isAdmin ? 'approved' : 'pending';
+  const sourceOrigin = typeof req.body?.sourceOrigin === 'string' && req.body.sourceOrigin.trim()
+    ? req.body.sourceOrigin.trim().slice(0, 120)
+    : 'Issuing Organization Confirmed';
+  const sourceUrl = sanitizeHttpUrl(req.body?.sourceUrl || externalUrl);
 
   const ins = db.prepare(`
     INSERT INTO opportunities (
       poster_user_id, title, opportunity_type, organization_name, location, is_remote,
-      compensation_or_award, deadline, description, requirements, external_url, approval_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      compensation_or_award, deadline, description, requirements, external_url, approval_status,
+      source_origin, source_url, availability_status, last_verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
   `).run(
     req.authUser!.id,
     title,
@@ -485,11 +691,14 @@ router.post('/opportunities', requireAuth, (req, res) => {
     deadline,
     description,
     requirements,
-    externalUrl,
-    status
+    sanitizeHttpUrl(externalUrl),
+    status,
+    sourceOrigin,
+    sourceUrl,
+    isAdmin ? new Date().toISOString() : null
   );
 
-  recordAudit(req.authUser!.id, 'opportunity_submitted', 'opportunity', Number(ins.lastInsertRowid), req.ip || '', { status, opportunityType });
+  recordAudit(req.authUser!.id, 'opportunity_submitted', 'opportunity', Number(ins.lastInsertRowid), req.ip || '', { status, opportunityType, sourceOrigin });
   return res.status(201).json({ id: Number(ins.lastInsertRowid), approvalStatus: status });
 });
 
@@ -536,7 +745,10 @@ router.get('/products', optionalAuth, (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
 
   const rows = db.prepare(`
-    SELECT p.*, s.store_name, s.country as seller_country, s.user_id as seller_user_id,
+    SELECT p.id, p.seller_id, p.title, p.category, p.product_type, p.description, p.price_pi, p.stock_qty,
+           p.image_url, p.approval_status, p.source_origin, p.source_url, p.availability_status, p.last_verified_at, p.created_at,
+           (CASE WHEN length(COALESCE(p.locked_content_enc, '')) > 0 THEN 1 ELSE 0 END) as has_locked_content,
+           s.store_name, s.country as seller_country, s.user_id as seller_user_id,
       (SELECT ROUND(AVG(r.rating), 1) FROM reviews r WHERE r.target_type = 'product' AND r.target_id = p.id AND r.moderation_status = 'approved') as avg_rating,
       (SELECT COUNT(*) FROM reviews r WHERE r.target_type = 'product' AND r.target_id = p.id AND r.moderation_status = 'approved') as review_count
     FROM products p
@@ -593,7 +805,13 @@ router.post('/products', requireAuth, (req, res) => {
   const productType = typeof req.body?.productType === 'string' ? req.body.productType.trim() : 'digital';
   const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
   const pricePi = Number(req.body?.pricePi);
-  const stockQty = Math.max(1, Number(req.body?.stockQty) || 1);
+  const stockQty = Math.max(0, Number(req.body?.stockQty) || 1);
+  const sourceOrigin = typeof req.body?.sourceOrigin === 'string' && req.body.sourceOrigin.trim()
+    ? req.body.sourceOrigin.trim().slice(0, 120)
+    : 'Seller Submission';
+  const sourceUrl = sanitizeHttpUrl(req.body?.sourceUrl);
+  const imageUrl = sanitizeHttpUrl(req.body?.imageUrl) || (typeof req.body?.imageUrl === 'string' && req.body.imageUrl.startsWith('/api/uploads/') ? req.body.imageUrl : '');
+  const lockedContent = typeof req.body?.lockedContent === 'string' ? req.body.lockedContent.trim() : '';
 
   if (title.length < 3 || description.length < 15 || !Number.isFinite(pricePi) || pricePi <= 0) {
     return res.status(400).json({ error: 'Valid product title, description, and price (> 0 PI) are required.' });
@@ -620,12 +838,30 @@ router.post('/products', requireAuth, (req, res) => {
   }
 
   const status = isAdmin ? 'approved' : 'pending';
+  const availability = stockQty > 0 ? 'available' : 'out_of_stock';
   const ins = db.prepare(`
-    INSERT INTO products (seller_id, title, category, product_type, description, price_pi, stock_qty, approval_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(seller.id, title, category, productType, description, pricePi, stockQty, status);
+    INSERT INTO products (
+      seller_id, title, category, product_type, description, price_pi, stock_qty,
+      image_url, approval_status, source_origin, source_url, availability_status, last_verified_at, locked_content_enc
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    seller.id,
+    title,
+    category,
+    productType,
+    description,
+    pricePi,
+    stockQty,
+    imageUrl,
+    status,
+    sourceOrigin,
+    sourceUrl,
+    availability,
+    isAdmin ? new Date().toISOString() : null,
+    encryptSensitive(lockedContent)
+  );
 
-  recordAudit(req.authUser!.id, 'product_created', 'product', Number(ins.lastInsertRowid), req.ip || '', { status });
+  recordAudit(req.authUser!.id, 'product_created', 'product', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin });
   return res.status(201).json({ id: Number(ins.lastInsertRowid), approvalStatus: status });
 });
 

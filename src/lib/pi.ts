@@ -76,7 +76,15 @@ export interface PaymentFlowResult {
   orderId?: number;
 }
 
+function makeIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `pi-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise<PaymentFlowResult> {
+  const idempotencyKey = makeIdempotencyKey();
   const intent = await apiRequest<{
     freeEnrolled?: boolean;
     message?: string;
@@ -85,7 +93,7 @@ export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise
     memo?: string;
   }>('/api/payments/create-intent', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, idempotencyKey }),
   });
 
   if (intent.freeEnrolled) {

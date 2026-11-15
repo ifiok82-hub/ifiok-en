@@ -18,6 +18,10 @@ export interface AuthUser {
   preferred_language: string;
   account_type: string;
   status: string;
+  mfa_enabled: number;
+  education_level?: string;
+  age_group?: string;
+  guardian_consent_verified?: number;
   roles: string[];
 }
 
@@ -30,7 +34,21 @@ declare global {
 }
 
 export function signSessionToken(userId: number): string {
-  return jwt.sign({ uid: userId }, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign({ uid: userId, scope: 'session' }, JWT_SECRET, { expiresIn: '7d' });
+}
+
+export function signMfaPendingToken(userId: number): string {
+  return jwt.sign({ uid: userId, scope: 'mfa_pending' }, JWT_SECRET, { expiresIn: '5m' });
+}
+
+export function verifyMfaPendingToken(token: string): number | null {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as { uid: number; scope?: string };
+    if (payload.scope !== 'mfa_pending') return null;
+    return payload.uid;
+  } catch {
+    return null;
+  }
 }
 
 export function setSessionCookie(res: Response, token: string) {
@@ -50,7 +68,8 @@ export function clearSessionCookie(res: Response) {
 export function loadUserWithRoles(userId: number): AuthUser | null {
   const user = db.prepare(`
     SELECT id, email, pi_uid, pi_username, full_name, country, timezone,
-           preferred_currency, preferred_language, account_type, status
+           preferred_currency, preferred_language, account_type, status, mfa_enabled,
+           education_level, age_group, guardian_consent_verified
     FROM users WHERE id = ?
   `).get(userId) as Omit<AuthUser, 'roles'> | undefined;
 
@@ -83,7 +102,8 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   const token = extractToken(req);
   if (token) {
     try {
-      const payload = jwt.verify(token, JWT_SECRET) as { uid: number };
+      const payload = jwt.verify(token, JWT_SECRET) as { uid: number; scope?: string };
+      if (payload.scope && payload.scope !== 'session') return next();
       const user = loadUserWithRoles(payload.uid);
       if (user && user.status === 'active') {
         req.authUser = user;
@@ -101,7 +121,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ error: 'Authentication required. Please sign in.' });
   }
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { uid: number };
+    const payload = jwt.verify(token, JWT_SECRET) as { uid: number; scope?: string };
+    if (payload.scope && payload.scope !== 'session') {
+      return res.status(401).json({ error: 'Multi-factor verification required to complete login.' });
+    }
     const user = loadUserWithRoles(payload.uid);
     if (!user) {
       return res.status(401).json({ error: 'Session account no longer exists.' });
@@ -114,6 +137,24 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   } catch {
     return res.status(401).json({ error: 'Invalid or expired session. Please sign in again.' });
   }
+}
+
+export function csrfOriginGuard(req: Request, res: Response, next: NextFunction) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  if (origin && host) {
+    try {
+      const originHost = new URL(origin).host;
+      if (originHost !== host) {
+        recordSecurityEvent('csrf_origin_mismatch', 'warning', null, req.ip || '', `Origin ${originHost} != Host ${host}`);
+        return res.status(403).json({ error: 'Cross-origin state mutation blocked by CSRF policy.' });
+      }
+    } catch {
+      return res.status(403).json({ error: 'Malformed request origin.' });
+    }
+  }
+  return next();
 }
 
 export function requireRole(...allowedRoles: string[]) {
@@ -159,6 +200,19 @@ export function recordAudit(
   `).run(actorUserId, action, entityType, String(entityId), ipAddress, JSON.stringify(details));
 }
 
+export function createSecurityAlert(
+  alertType: string,
+  severity: 'info' | 'warning' | 'critical',
+  userId: number | null,
+  ipAddress: string,
+  summary: string
+) {
+  db.prepare(`
+    INSERT INTO security_alerts (alert_type, severity, user_id, ip_address, summary)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(alertType, severity, userId, ipAddress, summary);
+}
+
 export function recordSecurityEvent(
   eventType: string,
   severity: 'info' | 'warning' | 'critical',
@@ -170,6 +224,9 @@ export function recordSecurityEvent(
     INSERT INTO security_events (event_type, severity, user_id, ip_address, details)
     VALUES (?, ?, ?, ?, ?)
   `).run(eventType, severity, userId, ipAddress, details);
+  if (severity === 'critical') {
+    createSecurityAlert(eventType, severity, userId, ipAddress, details);
+  }
 }
 
 export function createNotification(

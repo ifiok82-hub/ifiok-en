@@ -2,6 +2,13 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { db } from '../db.ts';
 import {
+  buildOtpAuthUri,
+  decryptSensitive,
+  encryptSensitive,
+  generateTotpSecret,
+  verifyTotpCode,
+} from '../lib/crypto.ts';
+import {
   assignRole,
   clearSessionCookie,
   createNotification,
@@ -10,7 +17,9 @@ import {
   recordSecurityEvent,
   requireAuth,
   setSessionCookie,
+  signMfaPendingToken,
   signSessionToken,
+  verifyMfaPendingToken,
 } from '../middleware/auth.ts';
 
 const router = Router();
@@ -19,10 +28,16 @@ const ALLOWED_ACCOUNT_TYPES = new Set([
   'member',
   'student',
   'instructor',
+  'teacher',
+  'school_admin',
+  'guardian',
   'freelancer',
   'seller',
   'organisation',
 ]);
+
+const ALLOWED_AGE_GROUPS = new Set(['under_13', 'teen_13_17', 'adult']);
+const ALLOWED_EDU_LEVELS = new Set(['primary', 'secondary', 'high_school', 'undergraduate', 'graduate', 'professional']);
 
 function validateEmail(email: unknown): string | null {
   if (typeof email !== 'string') return null;
@@ -96,6 +111,10 @@ router.post('/register', (req, res) => {
   const preferredLanguage = typeof req.body?.preferredLanguage === 'string' ? req.body.preferredLanguage.trim().slice(0, 10) : 'en';
   const rawType = typeof req.body?.accountType === 'string' ? req.body.accountType.trim() : 'member';
   const accountType = ALLOWED_ACCOUNT_TYPES.has(rawType) ? rawType : 'member';
+  const educationLevel = ALLOWED_EDU_LEVELS.has(req.body?.educationLevel) ? req.body.educationLevel : 'undergraduate';
+  const ageGroup = ALLOWED_AGE_GROUPS.has(req.body?.ageGroup) ? req.body.ageGroup : 'adult';
+  const guardianName = typeof req.body?.guardianName === 'string' ? req.body.guardianName.trim().slice(0, 120) : '';
+  const guardianEmail = validateEmail(req.body?.guardianEmail) || '';
 
   if (!email) return res.status(400).json({ error: 'Please provide a valid email address.' });
   if (password.length < 8) {
@@ -103,6 +122,11 @@ router.post('/register', (req, res) => {
   }
   if (fullName.length < 2 || fullName.length > 120) {
     return res.status(400).json({ error: 'Full name must be between 2 and 120 characters.' });
+  }
+  if (ageGroup === 'under_13' && (!guardianName || !guardianEmail)) {
+    return res.status(400).json({
+      error: 'Child protection requirement: Learners under 13 must provide a parent or guardian name and verified email.',
+    });
   }
 
   const existing = db.prepare(`SELECT id FROM users WHERE email = ?`).get(email);
@@ -114,20 +138,26 @@ router.post('/register', (req, res) => {
   const userId = db.transaction(() => {
     const ins = db.prepare(`
       INSERT INTO users (
-        email, password_hash, full_name, phone_country_code, phone_number,
-        country, timezone, preferred_currency, preferred_language, account_type
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        email, password_hash, full_name, phone_country_code, phone_number, phone_number_enc,
+        country, timezone, preferred_currency, preferred_language, account_type,
+        education_level, age_group, guardian_name, guardian_email, guardian_consent_verified
+      ) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       email,
       hash,
       fullName,
       phoneCountryCode,
-      phoneNumber,
+      encryptSensitive(phoneNumber),
       country,
       timezone,
       preferredCurrency,
       preferredLanguage,
-      accountType
+      accountType,
+      educationLevel,
+      ageGroup,
+      guardianName,
+      guardianEmail,
+      ageGroup === 'adult' ? 1 : guardianEmail ? 1 : 0
     );
     const id = Number(ins.lastInsertRowid);
     assignRole(id, 'member', id);
@@ -138,7 +168,7 @@ router.post('/register', (req, res) => {
       id,
       'welcome',
       'Welcome to IFIOK-EN',
-      'Your account is active. Complete your profile or explore Academy, Business Hub, Freelance, Opportunities, Market, and Community.',
+      'Your account is active. Complete your profile or explore IFIOK SCHOOL, Business Hub, Freelance, Opportunities, Market, and Community.',
       'profile'
     );
     recordAudit(id, 'user_registered', 'user', id, req.ip || '', { accountType, country });
@@ -160,8 +190,8 @@ router.post('/login', (req, res) => {
   }
 
   const row = db.prepare(`
-    SELECT id, password_hash, status FROM users WHERE email = ?
-  `).get(email) as { id: number; password_hash: string | null; status: string } | undefined;
+    SELECT id, password_hash, status, mfa_enabled FROM users WHERE email = ?
+  `).get(email) as { id: number; password_hash: string | null; status: string; mfa_enabled: number } | undefined;
 
   if (!row || !row.password_hash || !bcrypt.compareSync(password, row.password_hash)) {
     recordSecurityEvent('failed_login', 'warning', row?.id ?? null, req.ip || '', `Failed email login attempt for ${email}`);
@@ -173,11 +203,92 @@ router.post('/login', (req, res) => {
     return res.status(403).json({ error: 'Your account is currently suspended. Contact IFIOK-EN support.' });
   }
 
+  if (row.mfa_enabled === 1) {
+    const mfaToken = signMfaPendingToken(row.id);
+    return res.json({ mfaRequired: true, mfaToken });
+  }
+
   const user = loadUserWithRoles(row.id);
   const token = signSessionToken(row.id);
   setSessionCookie(res, token);
   recordAudit(row.id, 'user_login_email', 'user', row.id, req.ip || '', {});
   return res.json({ user });
+});
+
+router.post('/mfa/verify', (req, res) => {
+  const mfaToken = typeof req.body?.mfaToken === 'string' ? req.body.mfaToken : '';
+  const code = typeof req.body?.code === 'string' ? req.body.code : '';
+  const userId = verifyMfaPendingToken(mfaToken);
+  if (!userId) {
+    return res.status(401).json({ error: 'MFA verification challenge expired. Please sign in again.' });
+  }
+  const row = db.prepare(`SELECT mfa_secret_enc, status FROM users WHERE id = ?`).get(userId) as
+    | { mfa_secret_enc: string; status: string }
+    | undefined;
+  if (!row || row.status !== 'active') {
+    return res.status(403).json({ error: 'Account unavailable.' });
+  }
+  const secret = decryptSensitive(row.mfa_secret_enc);
+  if (!verifyTotpCode(secret, code)) {
+    recordSecurityEvent('mfa_failed', 'warning', userId, req.ip || '', 'Invalid TOTP MFA code entered during login');
+    return res.status(401).json({ error: 'Invalid 6-digit authenticator code.' });
+  }
+
+  const user = loadUserWithRoles(userId);
+  const sessionToken = signSessionToken(userId);
+  setSessionCookie(res, sessionToken);
+  recordAudit(userId, 'user_login_mfa_verified', 'user', userId, req.ip || '', {});
+  return res.json({ user });
+});
+
+router.post('/mfa/setup', requireAuth, (req, res) => {
+  const secret = generateTotpSecret();
+  const label = req.authUser!.email || req.authUser!.pi_username || `user-${req.authUser!.id}`;
+  db.prepare(`UPDATE users SET mfa_secret_enc = ?, updated_at = datetime('now') WHERE id = ?`).run(
+    encryptSensitive(secret),
+    req.authUser!.id
+  );
+  recordAudit(req.authUser!.id, 'mfa_setup_initiated', 'user', req.authUser!.id, req.ip || '', {});
+  return res.json({
+    secret,
+    otpauthUri: buildOtpAuthUri(label, secret),
+  });
+});
+
+router.post('/mfa/enable', requireAuth, (req, res) => {
+  const code = typeof req.body?.code === 'string' ? req.body.code : '';
+  const row = db.prepare(`SELECT mfa_secret_enc FROM users WHERE id = ?`).get(req.authUser!.id) as
+    | { mfa_secret_enc: string }
+    | undefined;
+  if (!row || !row.mfa_secret_enc) {
+    return res.status(400).json({ error: 'Initialize MFA setup first.' });
+  }
+  const secret = decryptSensitive(row.mfa_secret_enc);
+  if (!verifyTotpCode(secret, code)) {
+    return res.status(400).json({ error: 'Invalid 6-digit authenticator code. Verify your authenticator app time.' });
+  }
+  db.prepare(`UPDATE users SET mfa_enabled = 1, updated_at = datetime('now') WHERE id = ?`).run(req.authUser!.id);
+  recordAudit(req.authUser!.id, 'mfa_enabled', 'user', req.authUser!.id, req.ip || '', {});
+  return res.json({ mfaEnabled: true });
+});
+
+router.post('/mfa/disable', requireAuth, (req, res) => {
+  const code = typeof req.body?.code === 'string' ? req.body.code : '';
+  const row = db.prepare(`SELECT mfa_secret_enc, mfa_enabled FROM users WHERE id = ?`).get(req.authUser!.id) as
+    | { mfa_secret_enc: string; mfa_enabled: number }
+    | undefined;
+  if (!row || !row.mfa_enabled) {
+    return res.status(400).json({ error: 'MFA is not active on this account.' });
+  }
+  const secret = decryptSensitive(row.mfa_secret_enc);
+  if (!verifyTotpCode(secret, code)) {
+    return res.status(401).json({ error: 'Valid 6-digit authenticator code required to disable MFA.' });
+  }
+  db.prepare(`UPDATE users SET mfa_enabled = 0, mfa_secret_enc = '', updated_at = datetime('now') WHERE id = ?`).run(
+    req.authUser!.id
+  );
+  recordAudit(req.authUser!.id, 'mfa_disabled', 'user', req.authUser!.id, req.ip || '', {});
+  return res.json({ mfaEnabled: false });
 });
 
 router.post('/pi', async (req, res) => {
@@ -252,11 +363,14 @@ router.post('/logout', (req, res) => {
 
 router.get('/me', requireAuth, (req, res) => {
   const full = db.prepare(`
-    SELECT id, email, pi_uid, pi_username, full_name, bio, phone_country_code, phone_number,
-           country, timezone, preferred_currency, preferred_language, account_type, status, email_verified, created_at
+    SELECT id, email, pi_uid, pi_username, full_name, bio, phone_country_code, phone_number, phone_number_enc,
+           country, timezone, preferred_currency, preferred_language, account_type, status, email_verified, mfa_enabled,
+           education_level, age_group, guardian_name, guardian_email, guardian_consent_verified, created_at
     FROM users WHERE id = ?
-  `).get(req.authUser!.id);
-  res.json({ user: { ...(full as object), roles: req.authUser!.roles } });
+  `).get(req.authUser!.id) as Record<string, unknown>;
+  const decryptedPhone = full.phone_number_enc ? decryptSensitive(String(full.phone_number_enc)) : String(full.phone_number || '');
+  const { phone_number_enc: _omit, ...safe } = full;
+  res.json({ user: { ...safe, phone_number: decryptedPhone, roles: req.authUser!.roles } });
 });
 
 router.patch('/profile', requireAuth, (req, res) => {
@@ -268,6 +382,11 @@ router.patch('/profile', requireAuth, (req, res) => {
   const timezone = typeof req.body?.timezone === 'string' && req.body.timezone.trim() ? req.body.timezone.trim().slice(0, 80) : req.authUser!.timezone;
   const preferredCurrency = typeof req.body?.preferredCurrency === 'string' ? req.body.preferredCurrency.trim().slice(0, 10) : req.authUser!.preferred_currency;
   const preferredLanguage = typeof req.body?.preferredLanguage === 'string' ? req.body.preferredLanguage.trim().slice(0, 10) : req.authUser!.preferred_language;
+  const educationLevel = ALLOWED_EDU_LEVELS.has(req.body?.educationLevel)
+    ? req.body.educationLevel
+    : req.authUser!.education_level || 'undergraduate';
+  const guardianName = typeof req.body?.guardianName === 'string' ? req.body.guardianName.trim().slice(0, 120) : '';
+  const guardianEmail = validateEmail(req.body?.guardianEmail) || '';
 
   if (fullName.length < 2) {
     return res.status(400).json({ error: 'Full name must be at least 2 characters.' });
@@ -275,19 +394,45 @@ router.patch('/profile', requireAuth, (req, res) => {
 
   db.prepare(`
     UPDATE users
-    SET full_name = ?, bio = ?, phone_country_code = ?, phone_number = ?,
+    SET full_name = ?, bio = ?, phone_country_code = ?, phone_number = '', phone_number_enc = ?,
         country = ?, timezone = ?, preferred_currency = ?, preferred_language = ?,
+        education_level = ?,
+        guardian_name = CASE WHEN ? != '' THEN ? ELSE guardian_name END,
+        guardian_email = CASE WHEN ? != '' THEN ? ELSE guardian_email END,
+        guardian_consent_verified = CASE WHEN ? != '' THEN 1 ELSE guardian_consent_verified END,
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(fullName, bio, phoneCountryCode, phoneNumber, country, timezone, preferredCurrency, preferredLanguage, req.authUser!.id);
+  `).run(
+    fullName,
+    bio,
+    phoneCountryCode,
+    encryptSensitive(phoneNumber),
+    country,
+    timezone,
+    preferredCurrency,
+    preferredLanguage,
+    educationLevel,
+    guardianName,
+    guardianName,
+    guardianEmail,
+    guardianEmail,
+    guardianEmail,
+    req.authUser!.id
+  );
 
-  recordAudit(req.authUser!.id, 'profile_updated', 'user', req.authUser!.id, req.ip || '', { country, timezone });
+  recordAudit(req.authUser!.id, 'profile_updated', 'user', req.authUser!.id, req.ip || '', {
+    country,
+    timezone,
+    preferredLanguage,
+    educationLevel,
+  });
   const updated = db.prepare(`
-    SELECT id, email, pi_uid, pi_username, full_name, bio, phone_country_code, phone_number,
-           country, timezone, preferred_currency, preferred_language, account_type, status, email_verified, created_at
+    SELECT id, email, pi_uid, pi_username, full_name, bio, phone_country_code,
+           country, timezone, preferred_currency, preferred_language, account_type, status, email_verified, mfa_enabled,
+           education_level, age_group, guardian_name, guardian_email, guardian_consent_verified, created_at
     FROM users WHERE id = ?
-  `).get(req.authUser!.id);
-  return res.json({ user: { ...(updated as object), roles: req.authUser!.roles } });
+  `).get(req.authUser!.id) as Record<string, unknown>;
+  return res.json({ user: { ...updated, phone_number: phoneNumber, roles: req.authUser!.roles } });
 });
 
 export default router;

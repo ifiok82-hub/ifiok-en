@@ -1,7 +1,9 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
 import { BACKUPS_DIR, db, getSettingsMap } from '../db.ts';
+import { encryptSensitive, sanitizeHttpUrl } from '../lib/crypto.ts';
 import {
   assignRole,
   createNotification,
@@ -24,6 +26,8 @@ router.get('/overview', (_req, res) => {
     pendingProducts: (db.prepare(`SELECT COUNT(*) as c FROM products WHERE approval_status = 'pending'`).get() as { c: number }).c,
     pendingOpportunities: (db.prepare(`SELECT COUNT(*) as c FROM opportunities WHERE approval_status = 'pending'`).get() as { c: number }).c,
     pendingServices: (db.prepare(`SELECT COUNT(*) as c FROM freelance_services WHERE approval_status = 'pending'`).get() as { c: number }).c,
+    pendingSchools: (db.prepare(`SELECT COUNT(*) as c FROM schools WHERE verification_status = 'pending'`).get() as { c: number }).c,
+    openSafetyReports: (db.prepare(`SELECT COUNT(*) as c FROM student_safety_reports WHERE status = 'open'`).get() as { c: number }).c,
     openDisputes: (db.prepare(`SELECT COUNT(*) as c FROM disputes WHERE status IN ('open', 'under_review')`).get() as { c: number }).c,
     completedPaymentsCount: (db.prepare(`SELECT COUNT(*) as c FROM payments WHERE status = 'completed'`).get() as { c: number }).c,
     completedVolumePi: (db.prepare(`SELECT COALESCE(SUM(amount_pi), 0) as s FROM payments WHERE status = 'completed'`).get() as { s: number }).s,
@@ -89,6 +93,14 @@ router.get('/overview', (_req, res) => {
   const securityEvents = db.prepare(`
     SELECT se.*, u.email as user_email FROM security_events se LEFT JOIN users u ON u.id = se.user_id ORDER BY se.created_at DESC LIMIT 80
   `).all();
+  const securityAlerts = db.prepare(`
+    SELECT sa.*, u.email as user_email FROM security_alerts sa LEFT JOIN users u ON u.id = sa.user_id ORDER BY sa.created_at DESC LIMIT 80
+  `).all();
+  const schools = db.prepare(`
+    SELECT sc.*, u.full_name as owner_name, u.email as owner_email
+    FROM schools sc JOIN users u ON u.id = sc.owner_user_id
+    ORDER BY sc.created_at DESC
+  `).all();
 
   let backupFiles: string[] = [];
   if (fs.existsSync(BACKUPS_DIR)) {
@@ -107,12 +119,14 @@ router.get('/overview', (_req, res) => {
     products,
     opportunities,
     services,
+    schools,
     communityPosts,
     transactions,
     subscriptions,
     disputes,
     auditLogs,
     securityEvents,
+    securityAlerts,
     backupFiles,
   });
 });
@@ -164,7 +178,12 @@ router.patch('/businesses/:id', requireRole('super_admin', 'moderator'), (req, r
     | { owner_user_id: number; business_name: string }
     | undefined;
   if (!row) return res.status(404).json({ error: 'Business not found.' });
-  db.prepare(`UPDATE business_profiles SET verification_status = ?, is_featured = ? WHERE id = ?`).run(status, isFeatured, id);
+  db.prepare(`
+    UPDATE business_profiles
+    SET verification_status = ?, is_featured = ?,
+        last_verified_at = CASE WHEN ? = 'verified' THEN datetime('now') ELSE last_verified_at END
+    WHERE id = ?
+  `).run(status, isFeatured, status, id);
   createNotification(row.owner_user_id, 'business', 'Business Verification Updated', `"${row.business_name}" status is now ${status}.`, 'business');
   recordAudit(req.authUser!.id, 'business_moderation', 'business_profile', id, req.ip || '', { status, isFeatured });
   res.json({ ok: true });
@@ -184,7 +203,12 @@ router.patch('/courses/:id', requireRole('super_admin', 'moderator'), (req, res)
   const status = req.body?.approvalStatus;
   const isFeatured = req.body?.isFeatured ? 1 : 0;
   if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  db.prepare(`UPDATE courses SET approval_status = ?, is_featured = ? WHERE id = ?`).run(status, isFeatured, id);
+  db.prepare(`
+    UPDATE courses
+    SET approval_status = ?, is_featured = ?,
+        last_verified_at = CASE WHEN ? = 'approved' THEN datetime('now') ELSE last_verified_at END
+    WHERE id = ?
+  `).run(status, isFeatured, status, id);
   recordAudit(req.authUser!.id, 'course_moderation', 'course', id, req.ip || '', { status, isFeatured });
   res.json({ ok: true });
 });
@@ -202,7 +226,12 @@ router.patch('/products/:id', requireRole('super_admin', 'moderator'), (req, res
   const id = Number(req.params.id);
   const status = req.body?.approvalStatus;
   if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  db.prepare(`UPDATE products SET approval_status = ? WHERE id = ?`).run(status, id);
+  db.prepare(`
+    UPDATE products
+    SET approval_status = ?,
+        last_verified_at = CASE WHEN ? = 'approved' THEN datetime('now') ELSE last_verified_at END
+    WHERE id = ?
+  `).run(status, status, id);
   recordAudit(req.authUser!.id, 'product_moderation', 'product', id, req.ip || '', { status });
   res.json({ ok: true });
 });
@@ -211,7 +240,12 @@ router.patch('/opportunities/:id', requireRole('super_admin', 'moderator'), (req
   const id = Number(req.params.id);
   const status = req.body?.approvalStatus;
   if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  db.prepare(`UPDATE opportunities SET approval_status = ? WHERE id = ?`).run(status, id);
+  db.prepare(`
+    UPDATE opportunities
+    SET approval_status = ?,
+        last_verified_at = CASE WHEN ? = 'approved' THEN datetime('now') ELSE last_verified_at END
+    WHERE id = ?
+  `).run(status, status, id);
   recordAudit(req.authUser!.id, 'opportunity_moderation', 'opportunity', id, req.ip || '', { status });
   res.json({ ok: true });
 });
@@ -220,7 +254,12 @@ router.patch('/services/:id', requireRole('super_admin', 'moderator'), (req, res
   const id = Number(req.params.id);
   const status = req.body?.approvalStatus;
   if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  db.prepare(`UPDATE freelance_services SET approval_status = ? WHERE id = ?`).run(status, id);
+  db.prepare(`
+    UPDATE freelance_services
+    SET approval_status = ?,
+        last_verified_at = CASE WHEN ? = 'approved' THEN datetime('now') ELSE last_verified_at END
+    WHERE id = ?
+  `).run(status, status, id);
   recordAudit(req.authUser!.id, 'service_moderation', 'freelance_service', id, req.ip || '', { status });
   res.json({ ok: true });
 });
@@ -231,6 +270,26 @@ router.patch('/community-posts/:id', requireRole('super_admin', 'moderator'), (r
   if (!['active', 'flagged', 'removed'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   db.prepare(`UPDATE community_posts SET moderation_status = ? WHERE id = ?`).run(status, id);
   recordAudit(req.authUser!.id, 'community_post_moderation', 'community_post', id, req.ip || '', { status });
+  res.json({ ok: true });
+});
+
+router.patch('/schools/:id', requireRole('super_admin', 'moderator'), (req, res) => {
+  const id = Number(req.params.id);
+  const status = req.body?.verificationStatus;
+  if (!['pending', 'verified', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid school verification status' });
+  const row = db.prepare(`SELECT owner_user_id, name FROM schools WHERE id = ?`).get(id) as
+    | { owner_user_id: number; name: string }
+    | undefined;
+  if (!row) return res.status(404).json({ error: 'Institution not found.' });
+  db.prepare(`UPDATE schools SET verification_status = ? WHERE id = ?`).run(status, id);
+  createNotification(
+    row.owner_user_id,
+    'academy',
+    'School Verification Updated',
+    `Institution "${row.name}" verification status updated to "${status}".`,
+    'academy'
+  );
+  recordAudit(req.authUser!.id, 'school_moderation', 'school', id, req.ip || '', { status });
   res.json({ ok: true });
 });
 
@@ -257,8 +316,9 @@ router.patch('/disputes/:id', requireRole('super_admin', 'moderator', 'finance_a
     `).run(status, resolutionNotes, req.authUser!.id, id);
 
     if (status === 'refunded' && dispute.target_type === 'order' && dispute.target_id > 0) {
-      db.prepare(`UPDATE orders SET status = 'refunded' WHERE id = ?`).run(dispute.target_id);
+      db.prepare(`UPDATE orders SET status = 'refunded', fulfillment_status = 'revoked_refunded' WHERE id = ?`).run(dispute.target_id);
       db.prepare(`UPDATE payments SET status = 'refunded', updated_at = datetime('now') WHERE order_id = ?`).run(dispute.target_id);
+      db.prepare(`UPDATE entitlements SET is_unlocked = 0, revoked_at = datetime('now') WHERE order_id = ?`).run(dispute.target_id);
     }
 
     createNotification(
@@ -332,6 +392,222 @@ router.get('/backups/download/:fileName', requireRole('super_admin'), (req, res)
   if (!fs.existsSync(target)) return res.status(404).json({ error: 'Backup file not found.' });
   recordAudit(req.authUser!.id, 'database_backup_downloaded', 'backup', safeName, req.ip || '', {});
   return res.download(target, safeName);
+});
+
+// Acknowledge or resolve security alerts
+router.patch('/security-alerts/:id', requireRole('super_admin', 'moderator'), (req, res) => {
+  const id = Number(req.params.id);
+  const status = req.body?.status;
+  if (!['open', 'acknowledged', 'resolved'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid security alert status.' });
+  }
+  db.prepare(`UPDATE security_alerts SET status = ? WHERE id = ?`).run(status, id);
+  recordAudit(req.authUser!.id, 'security_alert_updated', 'security_alert', id, req.ip || '', { status });
+  return res.json({ ok: true });
+});
+
+// Super Admin Authorized Supplier Feed / Verified Inventory Publisher (Strict Provenance Required)
+router.post('/import-verified', requireRole('super_admin'), (req, res) => {
+  const entityType = req.body?.entityType;
+  const sourceOrigin = typeof req.body?.sourceOrigin === 'string' ? req.body.sourceOrigin.trim().slice(0, 120) : '';
+  const sourceUrl = sanitizeHttpUrl(req.body?.sourceUrl);
+  const availabilityStatus = ['available', 'limited', 'out_of_stock'].includes(req.body?.availabilityStatus)
+    ? req.body.availabilityStatus
+    : 'available';
+
+  if (!['product', 'course', 'business', 'opportunity'].includes(entityType)) {
+    return res.status(400).json({ error: 'entityType must be product, course, business, or opportunity.' });
+  }
+  if (sourceOrigin.length < 3) {
+    return res.status(400).json({ error: 'Explicit sourceOrigin provenance is required for verified imports.' });
+  }
+
+  const nowIso = new Date().toISOString();
+
+  if (entityType === 'product') {
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const category = typeof req.body?.category === 'string' ? req.body.category.trim() : 'Electronics & Tech';
+    const productType = ['physical', 'digital', 'service', 'web3', 'pi_app', 'gaming_asset'].includes(req.body?.productType)
+      ? req.body.productType
+      : 'digital';
+    const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+    const pricePi = Number(req.body?.pricePi);
+    const stockQty = Math.max(0, Number(req.body?.stockQty) || 1);
+    const imageUrl =
+      sanitizeHttpUrl(req.body?.imageUrl) ||
+      (typeof req.body?.imageUrl === 'string' && req.body.imageUrl.startsWith('/api/uploads/') ? req.body.imageUrl : '');
+    const lockedContent = typeof req.body?.lockedContent === 'string' ? req.body.lockedContent.trim() : '';
+
+    if (title.length < 3 || description.length < 15 || !Number.isFinite(pricePi) || pricePi <= 0) {
+      return res.status(400).json({ error: 'Valid product title, description, and pricePi (> 0) are required.' });
+    }
+
+    let seller = db.prepare(`SELECT id FROM sellers WHERE user_id = ?`).get(req.authUser!.id) as { id: number } | undefined;
+    if (!seller) {
+      const sRes = db.prepare(`
+        INSERT INTO sellers (user_id, store_name, description, country, verification_status)
+        VALUES (?, 'IFIOK-EN Verified Inventory', 'Official platform-verified inventory and authorized supplier catalog.', 'Global', 'verified')
+      `).run(req.authUser!.id);
+      seller = { id: Number(sRes.lastInsertRowid) };
+    }
+
+    const ins = db.prepare(`
+      INSERT INTO products (
+        seller_id, title, category, product_type, description, price_pi, stock_qty,
+        image_url, approval_status, source_origin, source_url, availability_status, last_verified_at, locked_content_enc
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?)
+    `).run(
+      seller.id,
+      title,
+      category,
+      productType,
+      description,
+      pricePi,
+      stockQty,
+      imageUrl,
+      sourceOrigin,
+      sourceUrl,
+      stockQty > 0 ? availabilityStatus : 'out_of_stock',
+      nowIso,
+      encryptSensitive(lockedContent)
+    );
+    recordAudit(req.authUser!.id, 'verified_product_imported', 'product', Number(ins.lastInsertRowid), req.ip || '', { sourceOrigin });
+    return res.status(201).json({ id: Number(ins.lastInsertRowid), entityType, lastVerifiedAt: nowIso });
+  }
+
+  if (entityType === 'course') {
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const category = typeof req.body?.category === 'string' ? req.body.category.trim() : 'Web3 & Blockchain';
+    const level = typeof req.body?.level === 'string' ? req.body.level.trim() : 'Beginner';
+    const durationHours = Math.max(1, Math.min(200, Number(req.body?.durationHours) || 6));
+    const pricePi = Math.max(0, Number(req.body?.pricePi) || 0);
+    const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+    const syllabus = Array.isArray(req.body?.syllabus)
+      ? req.body.syllabus.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
+      : ['Module 1: Foundations', 'Module 2: Applied Implementation', 'Module 3: Verification Assessment'];
+    const imageUrl =
+      sanitizeHttpUrl(req.body?.imageUrl) ||
+      (typeof req.body?.imageUrl === 'string' && req.body.imageUrl.startsWith('/api/uploads/') ? req.body.imageUrl : '');
+    const lockedMaterials = typeof req.body?.lockedMaterials === 'string' ? req.body.lockedMaterials.trim() : '';
+
+    if (title.length < 5 || description.length < 20) {
+      return res.status(400).json({ error: 'Course title and detailed description are required.' });
+    }
+
+    let instructor = db.prepare(`SELECT id FROM instructors WHERE user_id = ?`).get(req.authUser!.id) as { id: number } | undefined;
+    if (!instructor) {
+      const iRes = db.prepare(`
+        INSERT INTO instructors (user_id, headline, bio, expertise, approval_status)
+        VALUES (?, 'IFIOK-EN Curriculum Lead', 'Official platform educational curriculum authority.', ?, 'approved')
+      `).run(req.authUser!.id, category);
+      instructor = { id: Number(iRes.lastInsertRowid) };
+    }
+
+    const slug = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50)}-${crypto.randomBytes(3).toString('hex')}`;
+    const ins = db.prepare(`
+      INSERT INTO courses (
+        instructor_id, title, slug, category, level, duration_hours, price_pi, syllabus_json, description,
+        image_url, approval_status, is_featured, source_origin, source_url, availability_status, last_verified_at, locked_materials_enc
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 1, ?, ?, ?, ?, ?)
+    `).run(
+      instructor.id,
+      title,
+      slug,
+      category,
+      level,
+      durationHours,
+      pricePi,
+      JSON.stringify(syllabus),
+      description,
+      imageUrl,
+      sourceOrigin,
+      sourceUrl,
+      availabilityStatus,
+      nowIso,
+      encryptSensitive(lockedMaterials)
+    );
+    recordAudit(req.authUser!.id, 'verified_course_imported', 'course', Number(ins.lastInsertRowid), req.ip || '', { sourceOrigin });
+    return res.status(201).json({ id: Number(ins.lastInsertRowid), entityType, lastVerifiedAt: nowIso });
+  }
+
+  if (entityType === 'business') {
+    const businessName = typeof req.body?.businessName === 'string' ? req.body.businessName.trim() : '';
+    const sector = typeof req.body?.sector === 'string' ? req.body.sector.trim() : '';
+    const country = typeof req.body?.country === 'string' ? req.body.country.trim() : 'Global';
+    const website = sanitizeHttpUrl(req.body?.website);
+    const summary = typeof req.body?.summary === 'string' ? req.body.summary.trim() : '';
+    const servicesOffered = typeof req.body?.servicesOffered === 'string' ? req.body.servicesOffered.trim() : sector;
+    const regNo = typeof req.body?.registrationNumber === 'string' ? req.body.registrationNumber.trim() : '';
+    const maskedReg = regNo.length > 4 ? `***${regNo.slice(-4)}` : regNo;
+
+    if (businessName.length < 2 || sector.length < 2 || summary.length < 15) {
+      return res.status(400).json({ error: 'Business name, sector, and descriptive summary are required.' });
+    }
+
+    const ins = db.prepare(`
+      INSERT INTO business_profiles (
+        owner_user_id, business_name, registration_number, registration_number_enc, sector, country, website,
+        summary, services_offered, verification_status, is_featured, source_origin, source_url, availability_status, last_verified_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', 1, ?, ?, ?, ?)
+    `).run(
+      req.authUser!.id,
+      businessName,
+      maskedReg,
+      encryptSensitive(regNo),
+      sector,
+      country,
+      website,
+      summary,
+      servicesOffered,
+      sourceOrigin,
+      sourceUrl || website,
+      availabilityStatus,
+      nowIso
+    );
+    recordAudit(req.authUser!.id, 'verified_business_imported', 'business_profile', Number(ins.lastInsertRowid), req.ip || '', { sourceOrigin });
+    return res.status(201).json({ id: Number(ins.lastInsertRowid), entityType, lastVerifiedAt: nowIso });
+  }
+
+  // opportunity
+  const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+  const opportunityType = ['job', 'internship', 'scholarship', 'grant', 'partnership'].includes(req.body?.opportunityType)
+    ? req.body.opportunityType
+    : 'job';
+  const organizationName = typeof req.body?.organizationName === 'string' ? req.body.organizationName.trim() : '';
+  const location = typeof req.body?.location === 'string' ? req.body.location.trim() : 'Global';
+  const compensationOrAward = typeof req.body?.compensationOrAward === 'string' ? req.body.compensationOrAward.trim() : '';
+  const deadline = typeof req.body?.deadline === 'string' ? req.body.deadline.trim() : '';
+  const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+
+  if (title.length < 5 || organizationName.length < 2 || description.length < 20 || !deadline) {
+    return res.status(400).json({ error: 'Title, issuing organization, deadline, and full description are required.' });
+  }
+
+  const ins = db.prepare(`
+    INSERT INTO opportunities (
+      poster_user_id, title, opportunity_type, organization_name, location, is_remote,
+      compensation_or_award, deadline, description, requirements, external_url, approval_status,
+      source_origin, source_url, availability_status, last_verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?)
+  `).run(
+    req.authUser!.id,
+    title,
+    opportunityType,
+    organizationName,
+    location,
+    req.body?.isRemote ? 1 : 0,
+    compensationOrAward || 'Disclosed by issuing organization',
+    deadline,
+    description,
+    typeof req.body?.requirements === 'string' && req.body.requirements.trim() ? req.body.requirements.trim() : description,
+    sourceUrl,
+    sourceOrigin,
+    sourceUrl,
+    availabilityStatus,
+    nowIso
+  );
+  recordAudit(req.authUser!.id, 'verified_opportunity_imported', 'opportunity', Number(ins.lastInsertRowid), req.ip || '', { sourceOrigin });
+  return res.status(201).json({ id: Number(ins.lastInsertRowid), entityType, lastVerifiedAt: nowIso });
 });
 
 export default router;

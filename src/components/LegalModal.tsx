@@ -14,7 +14,7 @@ const POLICIES: Record<PolicyKey, { title: string; updated: string; sections: Ar
     sections: [
       {
         heading: '1. Scope of the Digital Empowerment Ecosystem',
-        body: 'IFIOK-EN operates an integrated digital platform spanning IFIOK Academy, IFIOK Business Hub, IFIOK Freelance, IFIOK Opportunities, IFIOK Market, and IFIOK Community. All accounts are subject to role-based access governance and truthful identity representation.',
+        body: 'IFIOK-EN operates an integrated digital platform spanning IFIOK SCHOOL — Global Digital Learning, IFIOK Business Hub, IFIOK Freelance, IFIOK Opportunities, IFIOK Market, and IFIOK Community. All accounts are subject to role-based access governance and truthful identity representation.',
       },
       {
         heading: '2. Pi Network Settlement & Testnet Environment',

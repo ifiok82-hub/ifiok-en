@@ -1,6 +1,30 @@
 export type AppView = 'home' | 'divisions' | 'dashboard' | 'admin';
 export type DivisionTab = 'academy' | 'business' | 'freelance' | 'opportunities' | 'market' | 'community';
-export type LanguageCode = 'en' | 'fr' | 'es' | 'pt';
+export type AcademySubView =
+  | 'courses'
+  | 'professor'
+  | 'classroom'
+  | 'schools'
+  | 'student_portal'
+  | 'teacher_portal'
+  | 'guardian_portal'
+  | 'certificates';
+export type LanguageCode =
+  | 'en'
+  | 'fr'
+  | 'es'
+  | 'pt'
+  | 'ar'
+  | 'zh'
+  | 'yo'
+  | 'ha'
+  | 'ig'
+  | 'sw'
+  | 'de'
+  | 'hi'
+  | 'ja'
+  | 'ko'
+  | 'ru';
 export type CurrencyCode = 'PI' | 'USD' | 'EUR' | 'GBP' | 'NGN';
 
 export interface UserProfile {
@@ -17,7 +41,13 @@ export interface UserProfile {
   preferred_currency: string;
   preferred_language: string;
   account_type: string;
+  education_level?: string;
+  age_group?: 'under_13' | 'teen_13_17' | 'adult' | string;
+  guardian_name?: string;
+  guardian_email?: string;
+  guardian_consent_verified?: number;
   status: string;
+  mfa_enabled?: number;
   roles: string[];
   created_at?: string;
 }
@@ -37,6 +67,46 @@ export interface PlatformSettingsPublic {
   mainnetEnabled: false;
 }
 
+export interface AiProviderStatus {
+  provider: 'gemini' | 'openai_compatible';
+  model: string;
+  configured: boolean;
+  operational: boolean;
+  lastTestedStatus: 'untested' | 'operational' | 'error' | string;
+  lastTestedAt: string | null;
+  dailyUserLimit: number;
+  monthlyCostCapUsd: number;
+  monthlyEstimatedCostUsd: number;
+  monthlyCallsCount: number;
+  childSafetyMode: string;
+  availableProviders: Array<{ id: string; label: string; configured: boolean; defaultModel: string }>;
+  supportedLanguages: Array<{
+    code: LanguageCode;
+    name: string;
+    nativeName: string;
+    rtl: boolean;
+    tier: 'initial' | 'expandable';
+  }>;
+  subjects?: string[];
+  assistantIdentity?: string;
+  tagline?: string;
+}
+
+export interface SchoolSummary {
+  id: number;
+  name: string;
+  school_type: string;
+  country: string;
+  city: string;
+  website: string;
+  summary: string;
+  verification_status: 'pending' | 'verified' | 'rejected';
+  accreditation_note: string;
+  child_safety_officer_email: string;
+  my_roles: string;
+  created_at: string;
+}
+
 export interface Course {
   id: number;
   instructor_id: number;
@@ -46,13 +116,23 @@ export interface Course {
   title: string;
   slug: string;
   category: string;
+  subject?: string;
+  language_code?: string;
+  issuing_organization?: string;
+  school_id?: number | null;
   level: string;
   duration_hours: number;
   price_pi: number;
   syllabus_json: string;
   description: string;
+  image_url?: string;
   approval_status: string;
   is_featured: number;
+  source_origin?: string;
+  source_url?: string;
+  availability_status?: string;
+  last_verified_at?: string | null;
+  has_locked_content?: number;
   avg_rating?: number | null;
   review_count?: number;
   created_at: string;
@@ -71,6 +151,10 @@ export interface BusinessProfile {
   services_offered: string;
   verification_status: string;
   is_featured: number;
+  source_origin?: string;
+  source_url?: string;
+  availability_status?: string;
+  last_verified_at?: string | null;
   created_at: string;
 }
 
@@ -85,6 +169,9 @@ export interface FreelanceService {
   delivery_days: number;
   price_pi: number;
   approval_status: string;
+  source_origin?: string;
+  availability_status?: string;
+  last_verified_at?: string | null;
   created_at: string;
 }
 
@@ -103,6 +190,10 @@ export interface Opportunity {
   requirements: string;
   external_url: string;
   approval_status: string;
+  source_origin?: string;
+  source_url?: string;
+  availability_status?: string;
+  last_verified_at?: string | null;
   created_at: string;
 }
 
@@ -118,7 +209,13 @@ export interface Product {
   description: string;
   price_pi: number;
   stock_qty: number;
+  image_url?: string;
   approval_status: string;
+  source_origin?: string;
+  source_url?: string;
+  availability_status?: string;
+  last_verified_at?: string | null;
+  has_locked_content?: number;
   avg_rating?: number | null;
   review_count?: number;
   created_at: string;

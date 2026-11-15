@@ -1,4 +1,5 @@
 import { apiRequest } from './api.ts';
+import { broadcastTokenToAppStudioWithRetries } from './appStudio.ts';
 
 export interface PiIncompletePayment {
   identifier?: string;
@@ -97,9 +98,16 @@ export function saveStoredPiAuth(session: PiAuthSession | null) {
     const serialized = JSON.stringify(session);
     window.localStorage.setItem(PI_AUTH_STORAGE_KEY, serialized);
     window.localStorage.setItem(LEGACY_PI_AUTH_STORAGE_KEY, serialized);
+    window.localStorage.setItem('pi_access_token', session.accessToken);
+    window.localStorage.setItem(
+      'pi_user',
+      JSON.stringify({ uid: session.uid, username: session.username })
+    );
   } else {
     window.localStorage.removeItem(PI_AUTH_STORAGE_KEY);
     window.localStorage.removeItem(LEGACY_PI_AUTH_STORAGE_KEY);
+    window.localStorage.removeItem('pi_access_token');
+    window.localStorage.removeItem('pi_user');
   }
   notifyPiAuthChanged(session);
 }
@@ -240,6 +248,7 @@ export async function connectWithPi(
   };
 
   saveStoredPiAuth(session);
+  broadcastTokenToAppStudioWithRetries(accessToken, verifyData.piUser);
   return session;
 }
 

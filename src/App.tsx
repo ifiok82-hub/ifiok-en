@@ -7,6 +7,7 @@ import { LegalModal, LegalPage, type PolicyKey } from './components/LegalModal.t
 import { MemberDashboard } from './components/MemberDashboard.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { apiRequest } from './lib/api.ts';
+import { listenForAppStudioHandshake } from './lib/appStudio.ts';
 import { detectInitialLanguage, isRtlLanguage, LANGUAGE_OPTIONS } from './lib/i18n.ts';
 import {
   connectWithPi,
@@ -173,10 +174,12 @@ export default function App() {
 
   useEffect(() => {
     void waitForPiSdk(6000);
+    const stopHandshake = listenForAppStudioHandshake();
     const syncPi = () => setPiAuth(getStoredPiAuth());
     window.addEventListener(PI_AUTH_EVENT, syncPi);
     window.addEventListener('storage', syncPi);
     return () => {
+      stopHandshake();
       window.removeEventListener(PI_AUTH_EVENT, syncPi);
       window.removeEventListener('storage', syncPi);
     };

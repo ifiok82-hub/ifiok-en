@@ -8,6 +8,7 @@ import { MemberDashboard } from './components/MemberDashboard.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { apiRequest } from './lib/api.ts';
 import { detectInitialLanguage, isRtlLanguage, LANGUAGE_OPTIONS } from './lib/i18n.ts';
+import { initAppStudioBridge } from './lib/appStudio.ts';
 import {
   connectWithPi,
   getStoredPiAuth,
@@ -172,11 +173,13 @@ export default function App() {
   );
 
   useEffect(() => {
+    const cleanupBridge = initAppStudioBridge();
     void waitForPiSdk(6000);
     const syncPi = () => setPiAuth(getStoredPiAuth());
     window.addEventListener(PI_AUTH_EVENT, syncPi);
     window.addEventListener('storage', syncPi);
     return () => {
+      cleanupBridge();
       window.removeEventListener(PI_AUTH_EVENT, syncPi);
       window.removeEventListener('storage', syncPi);
     };

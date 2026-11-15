@@ -114,6 +114,10 @@ router.get('/status', (_req, res) => {
 // Browser-supplied uid/username fields are strictly ignored.
 router.post('/auth', async (req, res) => {
   const accessToken = typeof req.body?.accessToken === 'string' ? req.body.accessToken.trim() : '';
+  const appStudioSession =
+    typeof req.body?.appStudioSession === 'string' && req.body.appStudioSession.trim()
+      ? req.body.appStudioSession.trim()
+      : 'piappstudio-RsKPKVTM5NR6Lji7gF8t3PUN29yGIUqI';
 
   if (!accessToken) {
     return res.status(400).json({ success: false, ok: false, error: 'Pi accessToken is required.' });
@@ -153,6 +157,7 @@ router.post('/auth', async (req, res) => {
         );
         recordAudit(id, 'pi_appstudio_auth_registered', 'user', id, req.ip || '', {
           pi_username: piUser.username,
+          appStudioSession,
         });
         return id;
       })();
@@ -164,6 +169,7 @@ router.post('/auth', async (req, res) => {
       );
       recordAudit(userId, 'pi_appstudio_auth_login', 'user', userId, req.ip || '', {
         pi_username: piUser.username,
+        appStudioSession,
       });
     }
 
@@ -171,13 +177,16 @@ router.post('/auth', async (req, res) => {
     const sessionToken = signSessionToken(userId);
     setSessionCookie(res, sessionToken, req);
 
-    console.log(`[PI APPSTUDIO AUTH] verified @${piUser.username} (${piUser.uid})`);
+    console.log(
+      `[PI APPSTUDIO AUTH] verified @${piUser.username} (${piUser.uid}) session=${appStudioSession}`
+    );
 
     return res.json({
       success: true,
       ok: true,
       username: piUser.username,
       uid: piUser.uid,
+      appStudioSession,
       sessionToken,
       piUser: {
         uid: piUser.uid,

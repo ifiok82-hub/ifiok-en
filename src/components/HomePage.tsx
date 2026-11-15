@@ -1072,13 +1072,33 @@ export function HomePage({
 
           <div className="md:col-span-2 space-y-2 text-xs">
             <h3 className="font-display font-semibold text-slate-900 dark:text-white mb-2">Account Access</h3>
-            <button
-              type="button"
-              onClick={() => (user ? onNavigateView('dashboard') : onOpenAuth('login'))}
-              className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
-            >
-              {user ? 'Member Dashboard' : 'Member Sign In'}
-            </button>
+            {piAuth ? (
+              <button
+                type="button"
+                onClick={() => (user ? onNavigateView('dashboard') : void handleHeroPiConnect())}
+                className="block text-emerald-600 dark:text-emerald-400 font-semibold hover:underline cursor-pointer"
+              >
+                Welcome @{piAuth.username}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleHeroPiConnect()}
+                disabled={piLoading}
+                className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer disabled:opacity-60"
+              >
+                {piLoading ? 'Signing in...' : 'Sign in with Pi'}
+              </button>
+            )}
+            {user && (
+              <button
+                type="button"
+                onClick={() => onNavigateView('dashboard')}
+                className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
+              >
+                Member Dashboard
+              </button>
+            )}
           </div>
         </div>
 

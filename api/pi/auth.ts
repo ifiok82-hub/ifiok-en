@@ -34,6 +34,10 @@ export default async function handler(req: Req, res: Res) {
 
   const body = await readJsonBody(req);
   const accessToken = typeof body.accessToken === 'string' ? body.accessToken.trim() : '';
+  const appStudioSession =
+    typeof body.appStudioSession === 'string' && body.appStudioSession.trim()
+      ? body.appStudioSession.trim()
+      : 'piappstudio-RsKPKVTM5NR6Lji7gF8t3PUN29yGIUqI';
 
   if (!accessToken) {
     return sendJson(res, 400, { success: false, ok: false, error: 'Pi accessToken is required.' });
@@ -66,11 +70,16 @@ export default async function handler(req: Req, res: Res) {
       return sendJson(res, 401, { success: false, ok: false, error: 'Incomplete App Studio user identity.' });
     }
 
+    console.log(
+      `[PI APPSTUDIO AUTH] verified @${data.user.username} (${data.user.uid}) session=${appStudioSession}`
+    );
+
     return sendJson(res, 200, {
       success: true,
       ok: true,
       username: data.user.username,
       uid: data.user.uid,
+      appStudioSession,
       sessionToken: data.sessionToken || '',
       piUser: {
         uid: data.user.uid,

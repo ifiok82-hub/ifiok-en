@@ -1,4 +1,5 @@
 import { apiRequest } from './api.ts';
+import { getAppStudioSession, sendTokenToAppStudio } from './appStudio.ts';
 
 export interface PiIncompletePayment {
   identifier?: string;
@@ -191,7 +192,7 @@ export async function connectWithPi(
   const ready = await waitForPiSdk(5000);
   if (!ready || !window.Pi) {
     throw new Error(
-      'Pi Browser runtime not detected. Open https://ifiok-en.vercel.app inside Pi Browser and tap Connect with Pi.'
+      'Pi Browser runtime not detected. Open https://ifiok-en.vercel.app inside Pi Browser and tap Sign in with Pi.'
     );
   }
 
@@ -204,18 +205,34 @@ export async function connectWithPi(
     paymentScopeAuthorized = true;
   }
 
-  // Keep only the accessToken; ignore browser-supplied uid and username
+  // Keep only the accessToken; server trusts App Studio exchange for verified uid/username
   const accessToken = auth?.accessToken;
   if (!accessToken) {
     throw new Error('Pi Network authentication did not return a valid accessToken.');
   }
 
-  // Exchange accessToken server-side via App Studio (/pi/auth/v1/login)
+  const appStudioSession = getAppStudioSession();
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem('pi_access_token', accessToken);
+    if (auth?.user) {
+      window.localStorage.setItem('pi_user', JSON.stringify(auth.user));
+    }
+  }
+
+  // Send immediate postMessage token relay so App Studio listener receives it promptly
+  sendTokenToAppStudio(accessToken, auth?.user || null);
+
+  // Exchange accessToken server-side via App Studio (/pi/auth/v1/login) & log appStudioSession
   const verifyRes = await fetch('/api/pi/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ accessToken }),
+    body: JSON.stringify({
+      accessToken,
+      username: auth?.user?.username,
+      uid: auth?.user?.uid,
+      appStudioSession,
+    }),
   });
 
   const verifyData = (await verifyRes.json().catch(() => ({}))) as {
@@ -223,6 +240,7 @@ export async function connectWithPi(
     ok?: boolean;
     error?: string;
     sessionToken?: string;
+    appStudioSession?: string;
     piUser?: { uid: string; username: string };
   };
 
@@ -231,9 +249,26 @@ export async function connectWithPi(
   }
 
   // Store ONLY the App Studio-verified uid and username returned by the backend
-  const session: PiAuthSession = {
-    username: verifyData.piUser.username,
+  const verifiedUser = {
     uid: verifyData.piUser.uid,
+    username: verifyData.piUser.username,
+  };
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem('pi_access_token', accessToken);
+    window.localStorage.setItem('pi_user', JSON.stringify(verifiedUser));
+  }
+
+  // Emit verified user + token to App Studio immediately and at 500ms / 2000ms / 5000ms
+  sendTokenToAppStudio(accessToken, verifiedUser);
+  if (typeof window !== 'undefined') {
+    window.setTimeout(() => sendTokenToAppStudio(accessToken, verifiedUser), 500);
+    window.setTimeout(() => sendTokenToAppStudio(accessToken, verifiedUser), 2000);
+    window.setTimeout(() => sendTokenToAppStudio(accessToken, verifiedUser), 5000);
+  }
+
+  const session: PiAuthSession = {
+    username: verifiedUser.username,
+    uid: verifiedUser.uid,
     accessToken,
     sessionToken: verifyData.sessionToken,
     connectedAt: new Date().toISOString(),
@@ -245,6 +280,10 @@ export async function connectWithPi(
 
 export async function logoutPi(): Promise<void> {
   saveStoredPiAuth(null);
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem('pi_access_token');
+    window.localStorage.removeItem('pi_user');
+  }
   await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
 }
 

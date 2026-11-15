@@ -67,7 +67,7 @@ export function Navbar({
               </span>
             ) : (
               <span className="font-medium text-amber-200 truncate">
-                Not Connected - Tap Connect with Pi
+                Not Connected - Tap Sign in with Pi
               </span>
             )}
           </div>
@@ -90,7 +90,7 @@ export function Navbar({
                 className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-colors cursor-pointer disabled:opacity-60"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span>{piConnecting ? 'Connecting Pi...' : 'Connect with Pi'}</span>
+                <span>{piConnecting ? 'Signing in...' : 'Sign in with Pi'}</span>
               </button>
             )}
           </div>

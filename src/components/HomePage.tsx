@@ -6,6 +6,8 @@ import {
   ChevronDown,
   Globe,
   Lock,
+  LogIn,
+  LogOut,
   Moon,
   Search,
   ShieldCheck,
@@ -21,6 +23,7 @@ import heroImg from '../assets/images/hero_global_network_1794641803186.jpg';
 import marketImg from '../assets/images/market_digital_commerce_1794641803851.jpg';
 import { apiRequest } from '../lib/api.ts';
 import { formatPiPrice, LANGUAGE_OPTIONS, TRANSLATIONS } from '../lib/i18n.ts';
+import type { PiAuthSession } from '../lib/pi.ts';
 import type {
   AcademySubView,
   AppView,
@@ -37,6 +40,7 @@ interface HomePageProps {
   summary: PublicSummary | null;
   loading: boolean;
   user: UserProfile | null;
+  piAuth: PiAuthSession | null;
   theme: 'light' | 'dark';
   language: LanguageCode;
   currency: CurrencyCode;
@@ -48,6 +52,8 @@ interface HomePageProps {
   onNavigateView: (view: AppView) => void;
   onOpenPolicy: (policy: PolicyKey) => void;
   onUnlockAdmin: () => void;
+  onConnectPi: () => Promise<void>;
+  onLogoutPi: () => Promise<void>;
 }
 
 const FAQS = [
@@ -73,6 +79,7 @@ export function HomePage({
   summary,
   loading,
   user,
+  piAuth,
   theme,
   language,
   currency,
@@ -84,6 +91,8 @@ export function HomePage({
   onNavigateView,
   onOpenPolicy,
   onUnlockAdmin,
+  onConnectPi,
+  onLogoutPi,
 }: HomePageProps) {
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [globalQuery, setGlobalQuery] = useState('');
@@ -93,11 +102,25 @@ export function HomePage({
   >([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [tapToast, setTapToast] = useState(false);
+  const [piLoading, setPiLoading] = useState(false);
+  const [piHeroError, setPiHeroError] = useState<string | null>(null);
   const tapCountRef = useRef(0);
   const lastTapRef = useRef(0);
   const tapTimerRef = useRef<number | null>(null);
   const t = TRANSLATIONS[language];
   const usdRate = summary?.settings.informationalUsdPerPi ?? 1.0;
+
+  const handleHeroPiConnect = async () => {
+    setPiHeroError(null);
+    setPiLoading(true);
+    try {
+      await onConnectPi();
+    } catch (err) {
+      setPiHeroError(err instanceof Error ? err.message : 'Unable to sign in with Pi.');
+    } finally {
+      setPiLoading(false);
+    }
+  };
 
   const handleFooterLogoTap = () => {
     const now = Date.now();
@@ -277,7 +300,38 @@ export function HomePage({
                 >
                   {t.exploreBtn}
                 </button>
+
+                {piAuth ? (
+                  <div className="inline-flex items-center gap-2.5 px-4 py-2.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 text-xs font-semibold text-emerald-800 dark:text-emerald-200">
+                    <ShieldCheck className="w-4 h-4 shrink-0" />
+                    <span>Welcome @{piAuth.username}</span>
+                    <button
+                      type="button"
+                      onClick={() => void onLogoutPi()}
+                      className="inline-flex items-center gap-1 ml-1 px-2.5 py-1 rounded bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      <span>Logout</span>
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleHeroPiConnect}
+                    disabled={piLoading}
+                    className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg text-sm font-bold bg-gradient-to-r from-[#4C1D95] to-[#0E1A36] hover:from-[#5B21B6] hover:to-[#172952] dark:from-amber-500 dark:to-amber-400 text-white dark:text-slate-950 shadow-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
+                  >
+                    <LogIn className="w-4 h-4 shrink-0" />
+                    <span>{piLoading ? 'Connecting Pi...' : 'Sign in with Pi'}</span>
+                  </button>
+                )}
               </div>
+
+              {piHeroError && (
+                <div className="rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 px-3.5 py-2 text-xs text-rose-800 dark:text-rose-200">
+                  {piHeroError}
+                </div>
+              )}
 
               {/* Compact utility controls (Theme + Language + Reference Currency) */}
               <div className="pt-3 flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800">

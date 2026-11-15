@@ -69,6 +69,8 @@ export default async function handler(req: Req, res: Res) {
     return sendJson(res, 200, {
       success: true,
       ok: true,
+      username: data.user.username,
+      uid: data.user.uid,
       sessionToken: data.sessionToken || '',
       piUser: {
         uid: data.user.uid,

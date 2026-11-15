@@ -427,6 +427,7 @@ export default function App() {
           summary={summary}
           loading={loadingSummary}
           user={user}
+          piAuth={piAuth}
           theme={theme}
           language={language}
           currency={currency}
@@ -438,6 +439,16 @@ export default function App() {
           onNavigateView={handleNavigateView}
           onOpenPolicy={setActivePolicy}
           onUnlockAdmin={handleUnlockAdmin}
+          onConnectPi={async () => {
+            const session = await connectWithPi();
+            setPiAuth(session);
+            void loadSession();
+          }}
+          onLogoutPi={async () => {
+            await logoutPi();
+            setPiAuth(null);
+            setUser(null);
+          }}
         />
       )}
 

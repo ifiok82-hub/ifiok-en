@@ -32,6 +32,7 @@ import type {
 } from '../types/platform.ts';
 import { BrandLogo } from './BrandLogo.tsx';
 import type { PolicyKey } from './LegalModal.tsx';
+import { PiTestnetPaymentButton } from './PiTestnetPaymentButton.tsx';
 
 interface HomePageProps {
   summary: PublicSummary | null;
@@ -239,6 +240,9 @@ export function HomePage({
                   {t.exploreBtn}
                 </button>
               </div>
+
+              {/* Visible Pi Testnet Verification Button (No Login Wall) */}
+              <PiTestnetPaymentButton compact />
 
               {/* Compact utility controls (Theme + Language + Reference Currency) */}
               <div className="pt-3 flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800">
@@ -958,7 +962,13 @@ export function HomePage({
               <button
                 key={key}
                 type="button"
-                onClick={() => onOpenPolicy(key)}
+                onClick={() => {
+                  if (key === 'privacy' || key === 'terms') {
+                    onNavigateView(key);
+                  } else {
+                    onOpenPolicy(key);
+                  }
+                }}
                 className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
               >
                 {label}

@@ -3,7 +3,7 @@ import { AdminDashboard } from './components/AdminDashboard.tsx';
 import { AuthModal } from './components/AuthModal.tsx';
 import { DivisionsView } from './components/DivisionsView.tsx';
 import { HomePage } from './components/HomePage.tsx';
-import { LegalModal, type PolicyKey } from './components/LegalModal.tsx';
+import { LegalModal, LegalPage, type PolicyKey } from './components/LegalModal.tsx';
 import { MemberDashboard } from './components/MemberDashboard.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { apiRequest } from './lib/api.ts';
@@ -72,6 +72,14 @@ const SEO_COPY: Record<string, { title: string; description: string }> = {
     title: 'Governance Console — IFIOK-EN Global Digital Empowerment Network',
     description: 'Administrator governance, verification queues, security alerts, and database backups.',
   },
+  privacy: {
+    title: 'Privacy Policy — IFIOK-EN Global Digital Empowerment Network',
+    description: 'IFIOK-EN data minimization, Pi Network authentication privacy, and HTTP-only security controls.',
+  },
+  terms: {
+    title: 'Terms of Service — IFIOK-EN Global Digital Empowerment Network',
+    description: 'Terms governing IFIOK-EN divisions, Pi Network Testnet settlement, and honest earnings standards.',
+  },
 };
 
 function parseRouteFromLocation(): { view: AppView; division: DivisionTab; academySubView: AcademySubView } {
@@ -91,6 +99,8 @@ function parseRouteFromLocation(): { view: AppView; division: DivisionTab; acade
   if (p === '/community') return { view: 'divisions', division: 'community', academySubView: 'courses' };
   if (p === '/dashboard') return { view: 'dashboard', division: 'academy', academySubView: 'courses' };
   if (p === '/admin') return { view: 'admin', division: 'academy', academySubView: 'courses' };
+  if (p === '/privacy') return { view: 'privacy', division: 'academy', academySubView: 'courses' };
+  if (p === '/terms') return { view: 'terms', division: 'academy', academySubView: 'courses' };
   return { view: 'home', division: 'academy', academySubView: 'courses' };
 }
 
@@ -177,6 +187,8 @@ export default function App() {
       else targetPath = DIVISION_PATHS[nextDiv];
     } else if (nextView === 'dashboard') targetPath = '/dashboard';
     else if (nextView === 'admin') targetPath = '/admin';
+    else if (nextView === 'privacy') targetPath = '/privacy';
+    else if (nextView === 'terms') targetPath = '/terms';
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, '', targetPath);
     }
@@ -360,7 +372,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#070C1B] text-slate-900 dark:text-slate-100">
-      {(view === 'home' || view === 'divisions') && (
+      {(view === 'home' || view === 'divisions' || view === 'privacy' || view === 'terms') && (
         <Navbar
           user={user}
           language={language}
@@ -428,6 +440,14 @@ export default function App() {
           user={user}
           onNavigateView={handleNavigateView}
           onRefreshSummary={loadSummary}
+        />
+      )}
+
+      {(view === 'privacy' || view === 'terms') && (
+        <LegalPage
+          policy={view}
+          onBackHome={() => handleNavigateView('home')}
+          onSwitchPolicy={(next) => handleNavigateView(next)}
         />
       )}
 

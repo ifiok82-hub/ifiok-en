@@ -23,6 +23,8 @@ import { apiRequest } from '../lib/api.ts';
 import { COUNTRIES, EDUCATION_LEVELS, LANGUAGE_OPTIONS, PHONE_CODES, TIMEZONES } from '../lib/i18n.ts';
 import { startPiPaymentFlow } from '../lib/pi.ts';
 import type { AcademySubView, AppView, DivisionTab, LanguageCode, PlatformSettingsPublic, UserProfile } from '../types/platform.ts';
+import { BrandLogo } from './BrandLogo.tsx';
+import { PiTestnetPaymentButton } from './PiTestnetPaymentButton.tsx';
 import { SchoolManagementPortal } from './SchoolManagementPortal.tsx';
 
 type MemberTab =
@@ -426,7 +428,7 @@ export function MemberDashboard({
     { id: 'opportunities', label: 'Opportunities', icon: Shield },
     { id: 'messages', label: 'Messages', icon: MessageSquare },
     { id: 'notifications', label: `Notifications (${unreadCount})`, icon: Bell },
-    { id: 'transactions', label: 'Transactions & Plans', icon: CreditCard },
+    { id: 'transactions', label: 'Wallet, Pi Testnet & Plans', icon: CreditCard },
     { id: 'support', label: 'Support Centre', icon: HelpCircle },
   ];
 
@@ -435,6 +437,9 @@ export function MemberDashboard({
       {/* Sidebar */}
       <aside className="lg:w-64 shrink-0 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#081024] p-4 flex flex-col justify-between">
         <div className="space-y-4">
+          <div className="px-2 pb-3 border-b border-slate-200 dark:border-slate-800">
+            <BrandLogo size="sm" />
+          </div>
           <div className="flex items-center justify-between px-2">
             <button
               type="button"
@@ -1273,6 +1278,13 @@ export function MemberDashboard({
 
             {tab === 'transactions' && (
               <div className="space-y-8">
+                <div>
+                  <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white mb-3">
+                    Pi Network Wallet &amp; Testnet Verification
+                  </h2>
+                  <PiTestnetPaymentButton />
+                </div>
+
                 <div>
                   <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white mb-3">
                     Membership Subscriptions (Pi Testnet Settlement)

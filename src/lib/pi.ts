@@ -1,10 +1,27 @@
 import { apiRequest } from './api.ts';
 
+export interface PiIncompletePayment {
+  identifier?: string;
+  user_uid?: string;
+  amount?: number;
+  status?: {
+    developer_approved?: boolean;
+    transaction_verified?: boolean;
+    developer_completed?: boolean;
+    cancelled?: boolean;
+    user_cancelled?: boolean;
+  };
+  transaction?: {
+    txid?: string;
+    verified?: boolean;
+  } | null;
+}
+
 interface PiSDK {
   init: (config: { version: string; sandbox: boolean }) => void;
   authenticate: (
     scopes: string[],
-    onIncompletePaymentFound: (payment: unknown) => void
+    onIncompletePaymentFound: (payment: PiIncompletePayment) => void
   ) => Promise<{ accessToken: string; user: { uid: string; username: string } }>;
   createPayment: (
     paymentData: { amount: number; memo: string; metadata: Record<string, unknown> },
@@ -29,25 +46,46 @@ export function isPiSdkAvailable(): boolean {
   return typeof window !== 'undefined' && Boolean(window.Pi);
 }
 
-export function initPiTestnet(): boolean {
+export function initPiTestnet(force = false): boolean {
   if (!isPiSdkAvailable()) return false;
-  if (!initialized) {
-    // Strictly Testnet (sandbox: true) until official Mainnet configuration & approvals are active
+  if (!initialized || force) {
+    // Strictly Testnet (sandbox: true) — NEVER Mainnet
     window.Pi!.init({ version: '2.0', sandbox: true });
     initialized = true;
   }
   return true;
 }
 
+export async function waitForPiSdk(timeoutMs = 2500): Promise<boolean> {
+  if (isPiSdkAvailable()) return initPiTestnet(true);
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 120));
+    if (isPiSdkAvailable()) {
+      return initPiTestnet(true);
+    }
+  }
+  return false;
+}
+
 export async function authenticateWithPi() {
-  if (!initPiTestnet()) {
+  const ready = await waitForPiSdk(1500);
+  if (!ready) {
     throw new Error(
       'Official Pi Network SDK requires the Pi Browser runtime. Please open IFIOK-EN inside Pi Browser or sign in using Email Authentication.'
     );
   }
 
-  const authResult = await window.Pi!.authenticate(['username', 'payments'], () => {
-    // Incomplete payments are reconciled server-side when resumed
+  const authResult = await window.Pi!.authenticate(['username', 'payments'], async (incomplete) => {
+    if (incomplete?.identifier && incomplete.transaction?.txid) {
+      await apiRequest('/api/pi/complete', {
+        method: 'POST',
+        body: JSON.stringify({
+          paymentId: incomplete.identifier,
+          txid: incomplete.transaction.txid,
+        }),
+      }).catch(() => undefined);
+    }
   });
 
   if (!authResult?.accessToken) {
@@ -57,6 +95,175 @@ export async function authenticateWithPi() {
   return apiRequest<{ user: unknown }>('/api/auth/pi', {
     method: 'POST',
     body: JSON.stringify({ accessToken: authResult.accessToken }),
+  });
+}
+
+export interface TestnetPaymentSuccess {
+  paymentId: string;
+  txid: string;
+  username: string;
+  amount: number;
+}
+
+export class PiPaymentCancelledError extends Error {
+  paymentId: string;
+  constructor(paymentId: string, message = 'Payment cancelled') {
+    super(message);
+    this.name = 'PiPaymentCancelledError';
+    this.paymentId = paymentId;
+  }
+}
+
+export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => void): Promise<TestnetPaymentSuccess> {
+  const sdkReady = await waitForPiSdk(2500);
+  if (!sdkReady || !window.Pi) {
+    throw new Error(
+      'Pi SDK is only active inside Pi Browser. Open https://ifiok-en.vercel.app inside Pi Browser (Testnet) to complete the 0.01 Pi test.'
+    );
+  }
+
+  // Always initialize strictly with version "2.0" and sandbox: true
+  window.Pi.init({ version: '2.0', sandbox: true });
+  initialized = true;
+
+  onStatusUpdate?.('Processing Testnet Payment...');
+
+  let resolvedUsername = '';
+  let resolvedPiUid = '';
+
+  const onIncompletePaymentFound = async (incomplete: PiIncompletePayment) => {
+    try {
+      const incId = incomplete?.identifier;
+      const incTxid = incomplete?.transaction?.txid;
+      if (!incId) return;
+      if (incTxid) {
+        await apiRequest('/api/pi/complete', {
+          method: 'POST',
+          body: JSON.stringify({
+            paymentId: incId,
+            txid: incTxid,
+            username: resolvedUsername,
+            piUid: resolvedPiUid,
+          }),
+        });
+      } else {
+        await apiRequest('/api/pi/cancel', {
+          method: 'POST',
+          body: JSON.stringify({
+            paymentId: incId,
+            username: resolvedUsername,
+            attemptServerCancel: true,
+          }),
+        });
+      }
+    } catch {
+      // Do not crash authenticate flow if cleanup fails
+    }
+  };
+
+  const auth = await window.Pi.authenticate(['payments', 'username'], onIncompletePaymentFound);
+  resolvedUsername = auth?.user?.username || '';
+  resolvedPiUid = auth?.user?.uid || '';
+
+  return new Promise<TestnetPaymentSuccess>((resolve, reject) => {
+    let settled = false;
+    const safeReject = (err: Error) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    };
+    const safeResolve = (result: TestnetPaymentSuccess) => {
+      if (!settled) {
+        settled = true;
+        resolve(result);
+      }
+    };
+
+    try {
+      window.Pi!.createPayment(
+        {
+          amount: 0.01,
+          memo: 'IFIOK-EN Testnet Test',
+          metadata: { type: 'testnet_test', app: 'ifiok-en' },
+        },
+        {
+          onReadyForServerApproval: async (paymentId: string) => {
+            try {
+              onStatusUpdate?.('Processing Testnet Payment...');
+              const res = await fetch('/api/pi/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                  paymentId,
+                  username: resolvedUsername,
+                  piUid: resolvedPiUid,
+                }),
+              });
+              const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+              if (!res.ok || data.ok === false) {
+                throw new Error(data.error || `Server approval failed (${res.status}).`);
+              }
+            } catch (err) {
+              safeReject(err instanceof Error ? err : new Error(String(err)));
+            }
+          },
+          onReadyForServerCompletion: async (paymentId: string, txid: string) => {
+            try {
+              onStatusUpdate?.('Processing Testnet Payment...');
+              const res = await fetch('/api/pi/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                  paymentId,
+                  txid,
+                  username: resolvedUsername,
+                  piUid: resolvedPiUid,
+                }),
+              });
+              const data = (await res.json().catch(() => ({}))) as {
+                ok?: boolean;
+                completed?: boolean;
+                paymentId?: string;
+                txid?: string;
+                username?: string;
+                amount?: number;
+                error?: string;
+              };
+              if (!res.ok || !data.completed) {
+                throw new Error(data.error || `Server completion failed (${res.status}).`);
+              }
+              safeResolve({
+                paymentId: data.paymentId || paymentId,
+                txid: data.txid || txid,
+                username: data.username || resolvedUsername || 'Pi Pioneer',
+                amount: data.amount ?? 0.01,
+              });
+            } catch (err) {
+              safeReject(err instanceof Error ? err : new Error(String(err)));
+            }
+          },
+          onCancel: (paymentId: string) => {
+            fetch('/api/pi/cancel', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ paymentId, username: resolvedUsername }),
+            }).catch(() => undefined);
+            safeReject(new PiPaymentCancelledError(paymentId, 'Payment cancelled'));
+          },
+          onError: (error: Error, payment?: unknown) => {
+            const msg = error?.message || 'Pi SDK payment error occurred.';
+            void payment;
+            safeReject(new Error(msg));
+          },
+        }
+      );
+    } catch (err) {
+      safeReject(err instanceof Error ? err : new Error('Failed to start Pi Testnet payment.'));
+    }
   });
 }
 
@@ -103,7 +310,8 @@ export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise
     };
   }
 
-  if (!initPiTestnet()) {
+  const ready = await waitForPiSdk(2000);
+  if (!ready) {
     await apiRequest('/api/payments/pi/cancel', {
       method: 'POST',
       body: JSON.stringify({ orderId: intent.orderId }),

@@ -13,6 +13,7 @@ import authRoutes from './server/routes/auth.ts';
 import dashboardRoutes from './server/routes/dashboard.ts';
 import divisionRoutes from './server/routes/divisions.ts';
 import paymentRoutes from './server/routes/payments.ts';
+import piTestnetRoutes from './server/routes/piTestnet.ts';
 import schoolRoutes from './server/routes/school.ts';
 import uploadRoutes from './server/routes/uploads.ts';
 
@@ -53,6 +54,7 @@ app.use('/api', csrfOriginGuard);
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/divisions', apiLimiter, divisionRoutes);
 app.use('/api/payments', apiLimiter, paymentRoutes);
+app.use('/api/pi', apiLimiter, piTestnetRoutes);
 app.use('/api/dashboard', apiLimiter, dashboardRoutes);
 app.use('/api/admin', apiLimiter, adminRoutes);
 app.use('/api/uploads', apiLimiter, uploadRoutes);
@@ -92,6 +94,8 @@ app.get('/robots.txt', (req, res) => {
       'Allow: /opportunities',
       'Allow: /market',
       'Allow: /community',
+      'Allow: /privacy',
+      'Allow: /terms',
       'Disallow: /api/',
       'Disallow: /admin',
       'Disallow: /dashboard',
@@ -116,6 +120,8 @@ app.get('/sitemap.xml', (req, res) => {
     '/opportunities',
     '/market',
     '/community',
+    '/privacy',
+    '/terms',
   ];
 
   const escXml = (s: string) =>

@@ -4,6 +4,7 @@ import { apiRequest } from '../lib/api.ts';
 import { COUNTRIES, EDUCATION_LEVELS, LANGUAGE_OPTIONS, PHONE_CODES, TIMEZONES } from '../lib/i18n.ts';
 import { authenticateWithPi, isPiSdkAvailable } from '../lib/pi.ts';
 import type { LanguageCode, UserProfile } from '../types/platform.ts';
+import { BrandLogo } from './BrandLogo.tsx';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -170,15 +171,18 @@ export function AuthModal({ isOpen, initialMode = 'login', onClose, onAuthentica
     >
       <div className="w-full max-w-lg rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden my-8">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
-          <h2 id="auth-modal-title" className="text-lg font-display font-bold text-slate-900 dark:text-white">
-            {mfaToken
-              ? 'Two-Factor Authentication Required'
-              : mode === 'login'
-                ? 'Sign in to IFIOK-EN'
-                : mode === 'register'
-                  ? 'Create your IFIOK-EN Account'
-                  : 'Initialize Global Administrator'}
-          </h2>
+          <div className="flex items-center gap-3 min-w-0">
+            <BrandLogo size="sm" showWordmark={false} />
+            <h2 id="auth-modal-title" className="text-lg font-display font-bold text-slate-900 dark:text-white truncate">
+              {mfaToken
+                ? 'Two-Factor Authentication Required'
+                : mode === 'login'
+                  ? 'Sign in to IFIOK-EN'
+                  : mode === 'register'
+                    ? 'Create your IFIOK-EN Account'
+                    : 'Initialize Global Administrator'}
+            </h2>
+          </div>
           <button
             type="button"
             onClick={onClose}

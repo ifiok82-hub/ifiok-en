@@ -143,10 +143,11 @@ export function csrfOriginGuard(req: Request, res: Response, next: NextFunction)
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   const origin = req.headers.origin;
   const host = req.headers.host;
-  if (origin && host) {
+  const forwardedHost = typeof req.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'].split(',')[0].trim() : '';
+  if (origin && (host || forwardedHost)) {
     try {
       const originHost = new URL(origin).host;
-      if (originHost !== host) {
+      if (originHost !== host && (!forwardedHost || originHost !== forwardedHost)) {
         recordSecurityEvent('csrf_origin_mismatch', 'warning', null, req.ip || '', `Origin ${originHost} != Host ${host}`);
         return res.status(403).json({ error: 'Cross-origin state mutation blocked by CSRF policy.' });
       }

@@ -1,4 +1,4 @@
-export type AppView = 'home' | 'divisions' | 'dashboard' | 'admin';
+export type AppView = 'home' | 'divisions' | 'dashboard' | 'admin' | 'privacy' | 'terms';
 export type DivisionTab = 'academy' | 'business' | 'freelance' | 'opportunities' | 'market' | 'community';
 export type AcademySubView =
   | 'courses'

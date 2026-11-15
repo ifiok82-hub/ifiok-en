@@ -615,8 +615,26 @@ export function initDatabase() {
   ensureColumn('orders', 'idempotency_key', 'TEXT');
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS pi_testnet_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_id TEXT UNIQUE NOT NULL,
+      txid TEXT,
+      username TEXT DEFAULT '',
+      pi_uid TEXT DEFAULT '',
+      user_id INTEGER,
+      amount_pi REAL NOT NULL DEFAULT 0.01,
+      memo TEXT DEFAULT 'IFIOK-EN Testnet Test',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      environment TEXT NOT NULL DEFAULT 'testnet',
+      status TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'approved', 'completed', 'cancelled', 'failed')),
+      verification_payload_json TEXT NOT NULL DEFAULT '{}',
+      error_message TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_txid_unique ON payments(txid) WHERE txid IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_idempotency ON orders(idempotency_key) WHERE idempotency_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_pi_testnet_payments_status ON pi_testnet_payments(status, created_at);
   `);
 
   const seedRoles = [

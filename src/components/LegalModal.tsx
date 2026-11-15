@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+import { ArrowLeft, X } from 'lucide-react';
 
 export type PolicyKey = 'terms' | 'privacy' | 'refund' | 'seller' | 'community';
 
@@ -7,7 +7,10 @@ interface LegalModalProps {
   onClose: () => void;
 }
 
-const POLICIES: Record<PolicyKey, { title: string; updated: string; sections: Array<{ heading: string; body: string }> }> = {
+export const POLICIES: Record<
+  PolicyKey,
+  { title: string; updated: string; sections: Array<{ heading: string; body: string }> }
+> = {
   terms: {
     title: 'IFIOK-EN Terms of Service',
     updated: 'Effective November 2026',
@@ -35,7 +38,11 @@ const POLICIES: Record<PolicyKey, { title: string; updated: string; sections: Ar
         body: 'Personal contact details including email addresses, international phone numbers, and Pi Network identifiers are stored strictly for authentication, order reconciliation, and authorized administrative governance. Private contact fields are never exposed in public member directories.',
       },
       {
-        heading: '2. Security Controls & Audit Trails',
+        heading: '2. Pi Network Authentication & Payment Records',
+        body: 'When you authenticate or perform Testnet payments via Pi Browser, only your authorized Pi username, UID, payment identifier, and blockchain transaction ID (txid) are verified and recorded to reconcile your transaction state.',
+      },
+      {
+        heading: '3. Security Controls & Audit Trails',
         body: 'Passwords are hashed using industry-standard adaptive bcrypt. Sessions rely on HTTP-only signed tokens, rate-limited endpoints, and immutable security audit trails.',
       },
     ],
@@ -119,5 +126,75 @@ export function LegalModal({ policy, onClose }: LegalModalProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+interface LegalPageProps {
+  policy: 'privacy' | 'terms';
+  onBackHome: () => void;
+  onSwitchPolicy: (next: 'privacy' | 'terms') => void;
+}
+
+export function LegalPage({ policy, onBackHome, onSwitchPolicy }: LegalPageProps) {
+  const doc = POLICIES[policy];
+
+  return (
+    <main className="mx-auto max-w-3xl px-4 sm:px-6 py-10 space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <button
+          type="button"
+          onClick={onBackHome}
+          className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white cursor-pointer"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Back to Home</span>
+        </button>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onSwitchPolicy('privacy')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+              policy === 'privacy'
+                ? 'bg-[#0E1A36] text-white dark:bg-amber-500 dark:text-slate-950'
+                : 'border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+            }`}
+          >
+            Privacy Policy
+          </button>
+          <button
+            type="button"
+            onClick={() => onSwitchPolicy('terms')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+              policy === 'terms'
+                ? 'bg-[#0E1A36] text-white dark:bg-amber-500 dark:text-slate-950'
+                : 'border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+            }`}
+          >
+            Terms of Service
+          </button>
+        </div>
+      </div>
+
+      <article className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 sm:p-8 space-y-6">
+        <header className="border-b border-slate-200 dark:border-slate-800 pb-4 space-y-1">
+          <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-950 dark:text-white">
+            {doc.title}
+          </h1>
+          <p className="text-xs font-mono text-slate-500 dark:text-slate-400">
+            {doc.updated} · App URL: https://ifiok-en.vercel.app
+          </p>
+        </header>
+
+        <div className="space-y-5 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+          {doc.sections.map((s) => (
+            <section key={s.heading} className="space-y-1.5">
+              <h2 className="font-display font-semibold text-base text-slate-900 dark:text-white">{s.heading}</h2>
+              <p>{s.body}</p>
+            </section>
+          ))}
+        </div>
+      </article>
+    </main>
   );
 }

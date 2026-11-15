@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api.ts';
 import type { AiProviderStatus, AppView, UserProfile } from '../types/platform.ts';
+import { BrandLogo } from './BrandLogo.tsx';
 
 type AdminTab =
   | 'analytics'
@@ -291,6 +292,9 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
     <div className="min-h-screen bg-slate-50 dark:bg-[#070C1B] flex flex-col lg:flex-row">
       {/* Sidebar */}
       <aside className="lg:w-64 shrink-0 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#081024] p-4 space-y-4">
+        <div className="px-2 pb-3 border-b border-slate-200 dark:border-slate-800">
+          <BrandLogo size="sm" />
+        </div>
         <div className="flex items-center justify-between px-2">
           <button
             type="button"

@@ -31,7 +31,12 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <script src="https://sdk.minepi.com/pi-sdk.js" defer></script>
+    <script src="https://sdk.minepi.com/pi-sdk.js"></script>
+    <script>
+      if (window.Pi) {
+        window.Pi.init({ version: '2.0', sandbox: true });
+      }
+    </script>
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",

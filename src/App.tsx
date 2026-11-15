@@ -8,7 +8,14 @@ import { MemberDashboard } from './components/MemberDashboard.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { apiRequest } from './lib/api.ts';
 import { detectInitialLanguage, isRtlLanguage, LANGUAGE_OPTIONS } from './lib/i18n.ts';
-import { initPiTestnet } from './lib/pi.ts';
+import {
+  connectWithPi,
+  getStoredPiAuth,
+  logoutPi,
+  PI_AUTH_EVENT,
+  waitForPiSdk,
+  type PiAuthSession,
+} from './lib/pi.ts';
 import type {
   AcademySubView,
   AppView,
@@ -110,6 +117,7 @@ export default function App() {
   const [divisionTab, setDivisionTab] = useState<DivisionTab>(initialRoute.division);
   const [academySubView, setAcademySubView] = useState<AcademySubView>(initialRoute.academySubView);
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [piAuth, setPiAuth] = useState<PiAuthSession | null>(() => getStoredPiAuth());
   const [summary, setSummary] = useState<PublicSummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(true);
 
@@ -154,7 +162,14 @@ export default function App() {
   );
 
   useEffect(() => {
-    initPiTestnet();
+    void waitForPiSdk(6000);
+    const syncPi = () => setPiAuth(getStoredPiAuth());
+    window.addEventListener(PI_AUTH_EVENT, syncPi);
+    window.addEventListener('storage', syncPi);
+    return () => {
+      window.removeEventListener(PI_AUTH_EVENT, syncPi);
+      window.removeEventListener('storage', syncPi);
+    };
   }, []);
 
   useEffect(() => {
@@ -375,11 +390,22 @@ export default function App() {
       {(view === 'home' || view === 'divisions' || view === 'privacy' || view === 'terms') && (
         <Navbar
           user={user}
+          piAuth={piAuth}
           language={language}
           onNavigateHome={() => handleNavigateView('home')}
           onOpenDivision={handleOpenDivision}
           onOpenAuth={() => handleOpenAuth('register')}
           onNavigateView={handleNavigateView}
+          onConnectPi={async () => {
+            const session = await connectWithPi();
+            setPiAuth(session);
+            void loadSession();
+          }}
+          onLogoutPi={async () => {
+            await logoutPi();
+            setPiAuth(null);
+            setUser(null);
+          }}
         />
       )}
 

@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
+import fs from 'node:fs';
 import path from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import { db, initDatabase } from './server/db.ts';
@@ -63,6 +64,15 @@ app.use('/api/academy/schools', apiLimiter, schoolRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', platform: 'IFIOK-EN', environment: 'testnet' });
+});
+
+app.get('/validation-key.txt', (_req, res) => {
+  const keyPath = path.resolve(process.cwd(), 'public', 'validation-key.txt');
+  if (fs.existsSync(keyPath)) {
+    res.type('text/plain; charset=utf-8');
+    return res.send(fs.readFileSync(keyPath, 'utf8'));
+  }
+  return res.status(404).send('Not found');
 });
 
 function getBaseUrl(req: express.Request): string {

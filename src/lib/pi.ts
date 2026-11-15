@@ -51,7 +51,8 @@ declare global {
   }
 }
 
-const PI_AUTH_STORAGE_KEY = 'ifiok_pi_auth';
+const PI_AUTH_STORAGE_KEY = 'pi_auth';
+const LEGACY_PI_AUTH_STORAGE_KEY = 'ifiok_pi_auth';
 export const PI_AUTH_EVENT = 'ifiok-pi-auth-changed';
 
 let initialized = false;
@@ -68,7 +69,9 @@ function notifyPiAuthChanged(session: PiAuthSession | null) {
 export function getStoredPiAuth(): PiAuthSession | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(PI_AUTH_STORAGE_KEY);
+    const raw =
+      window.localStorage.getItem(PI_AUTH_STORAGE_KEY) ||
+      window.localStorage.getItem(LEGACY_PI_AUTH_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PiAuthSession>;
     if (!parsed.username || !parsed.uid || !parsed.accessToken) return null;
@@ -91,9 +94,12 @@ export function saveStoredPiAuth(session: PiAuthSession | null) {
     paymentScopeAuthorized = false;
   }
   if (session) {
-    window.localStorage.setItem(PI_AUTH_STORAGE_KEY, JSON.stringify(session));
+    const serialized = JSON.stringify(session);
+    window.localStorage.setItem(PI_AUTH_STORAGE_KEY, serialized);
+    window.localStorage.setItem(LEGACY_PI_AUTH_STORAGE_KEY, serialized);
   } else {
     window.localStorage.removeItem(PI_AUTH_STORAGE_KEY);
+    window.localStorage.removeItem(LEGACY_PI_AUTH_STORAGE_KEY);
   }
   notifyPiAuthChanged(session);
 }
@@ -179,7 +185,9 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
   }
 }
 
-export async function connectWithPi(scopes: string[] = ['username']): Promise<PiAuthSession> {
+export async function connectWithPi(
+  scopes: string[] = ['username', 'payments', 'wallet_address']
+): Promise<PiAuthSession> {
   const ready = await waitForPiSdk(5000);
   if (!ready || !window.Pi) {
     throw new Error(

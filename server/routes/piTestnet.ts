@@ -588,4 +588,50 @@ router.post('/cancel', optionalAuth, async (req, res) => {
   return res.json({ success: true, ok: true, cancelled: true, paymentId });
 });
 
+router.get('/payments', optionalAuth, async (req, res) => {
+  const sessionUsername = (req.authUser?.pi_username || '').replace(/^@/, '').toLowerCase();
+  const isRoleAdmin = Boolean(req.authUser?.roles.some((r) => ['super_admin', 'finance_admin'].includes(r)));
+  let authorized = sessionUsername === 'ifiok1967' || isRoleAdmin;
+
+  // Also support direct Pi Platform Bearer/header token verification for stateless clients
+  if (!authorized) {
+    const headerToken =
+      typeof req.headers['x-pi-access-token'] === 'string' ? req.headers['x-pi-access-token'].trim() : '';
+    if (headerToken) {
+      try {
+        const meRes = await fetchWithTimeout(
+          `${PI_API_BASE}/me`,
+          { headers: { Authorization: `Bearer ${headerToken}` } },
+          4000
+        );
+        if (meRes.ok) {
+          const piUser = (await meRes.json()) as { username?: string };
+          if ((piUser.username || '').replace(/^@/, '').toLowerCase() === 'ifiok1967') {
+            authorized = true;
+          }
+        }
+      } catch {
+        // Ignore network failure and keep unauthorized
+      }
+    }
+  }
+
+  if (!authorized) {
+    return res.status(403).json({
+      success: false,
+      ok: false,
+      error: 'Access Denied - Admin Only (@Ifiok1967)',
+    });
+  }
+
+  const rows = db.prepare(`
+    SELECT id, payment_id, txid, username, pi_uid, amount_pi, memo, environment, status, error_message, created_at, updated_at
+    FROM pi_testnet_payments
+    ORDER BY id DESC
+    LIMIT 30
+  `).all();
+
+  return res.json({ success: true, ok: true, payments: rows });
+});
+
 export default router;

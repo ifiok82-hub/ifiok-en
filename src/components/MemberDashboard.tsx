@@ -24,7 +24,6 @@ import { COUNTRIES, EDUCATION_LEVELS, LANGUAGE_OPTIONS, PHONE_CODES, TIMEZONES }
 import { startPiPaymentFlow } from '../lib/pi.ts';
 import type { AcademySubView, AppView, DivisionTab, LanguageCode, PlatformSettingsPublic, UserProfile } from '../types/platform.ts';
 import { BrandLogo } from './BrandLogo.tsx';
-import { PiTestnetPaymentButton } from './PiTestnetPaymentButton.tsx';
 import { SchoolManagementPortal } from './SchoolManagementPortal.tsx';
 
 type MemberTab =
@@ -428,7 +427,7 @@ export function MemberDashboard({
     { id: 'opportunities', label: 'Opportunities', icon: Shield },
     { id: 'messages', label: 'Messages', icon: MessageSquare },
     { id: 'notifications', label: `Notifications (${unreadCount})`, icon: Bell },
-    { id: 'transactions', label: 'Wallet, Pi Testnet & Plans', icon: CreditCard },
+    { id: 'transactions', label: 'Transactions & Plans', icon: CreditCard },
     { id: 'support', label: 'Support Centre', icon: HelpCircle },
   ];
 
@@ -449,15 +448,6 @@ export function MemberDashboard({
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Public Site</span>
             </button>
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => onNavigateView('admin')}
-                className="text-xs font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
-              >
-                Admin Console
-              </button>
-            )}
           </div>
 
           <nav className="flex lg:flex-col gap-1 overflow-x-auto pb-1 lg:pb-0">
@@ -1278,13 +1268,6 @@ export function MemberDashboard({
 
             {tab === 'transactions' && (
               <div className="space-y-8">
-                <div>
-                  <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white mb-3">
-                    Pi Network Wallet &amp; Testnet Verification
-                  </h2>
-                  <PiTestnetPaymentButton />
-                </div>
-
                 <div>
                   <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white mb-3">
                     Membership Subscriptions (Pi Testnet Settlement)

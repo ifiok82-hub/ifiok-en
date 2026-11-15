@@ -35,7 +35,6 @@ import type {
   UserProfile,
 } from '../types/platform.ts';
 import { GlobalAcademyHub } from './GlobalAcademyHub.tsx';
-import { PiTestnetPaymentButton } from './PiTestnetPaymentButton.tsx';
 
 interface DivisionsViewProps {
   activeTab: DivisionTab;
@@ -882,9 +881,7 @@ export function DivisionsView({
 
             {/* MARKET */}
             {activeTab === 'market' && (
-              <div className="space-y-6">
-                <PiTestnetPaymentButton />
-
+              <div>
                 {products.length === 0 ? (
                   <EmptyDivisionState
                     title="No approved marketplace products yet"

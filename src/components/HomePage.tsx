@@ -13,7 +13,7 @@ import {
   Sun,
   Users,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import academyImg from '../assets/images/academy_blockchain_course_1794641802089.jpg';
 import businessImg from '../assets/images/business_hub_advisory_1794641802926.jpg';
 import communityImg from '../assets/images/community_summit_collab_1794641802970.jpg';
@@ -32,7 +32,6 @@ import type {
 } from '../types/platform.ts';
 import { BrandLogo } from './BrandLogo.tsx';
 import type { PolicyKey } from './LegalModal.tsx';
-import { PiTestnetPaymentButton } from './PiTestnetPaymentButton.tsx';
 
 interface HomePageProps {
   summary: PublicSummary | null;
@@ -48,6 +47,7 @@ interface HomePageProps {
   onOpenDivision: (tab: DivisionTab, academySubView?: AcademySubView) => void;
   onNavigateView: (view: AppView) => void;
   onOpenPolicy: (policy: PolicyKey) => void;
+  onUnlockAdmin: () => void;
 }
 
 const FAQS = [
@@ -83,6 +83,7 @@ export function HomePage({
   onOpenDivision,
   onNavigateView,
   onOpenPolicy,
+  onUnlockAdmin,
 }: HomePageProps) {
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [globalQuery, setGlobalQuery] = useState('');
@@ -91,8 +92,45 @@ export function HomePage({
     Array<{ id: number; title: string; subtitle: string; pricePi: number | null; source_origin?: string; division: DivisionTab }>
   >([]);
   const [hasSearched, setHasSearched] = useState(false);
+  const [tapToast, setTapToast] = useState(false);
+  const tapCountRef = useRef(0);
+  const lastTapRef = useRef(0);
+  const tapTimerRef = useRef<number | null>(null);
   const t = TRANSLATIONS[language];
   const usdRate = summary?.settings.informationalUsdPerPi ?? 1.0;
+
+  const handleFooterLogoTap = () => {
+    const now = Date.now();
+    if (lastTapRef.current > 0 && now - lastTapRef.current > 5000) {
+      tapCountRef.current = 0;
+    }
+    lastTapRef.current = now;
+    tapCountRef.current += 1;
+
+    if (tapTimerRef.current !== null) {
+      window.clearTimeout(tapTimerRef.current);
+    }
+
+    if (tapCountRef.current === 3) {
+      setTapToast(true);
+    }
+
+    if (tapCountRef.current >= 7) {
+      tapCountRef.current = 0;
+      lastTapRef.current = 0;
+      tapTimerRef.current = null;
+      setTapToast(false);
+      onUnlockAdmin();
+      return;
+    }
+
+    tapTimerRef.current = window.setTimeout(() => {
+      tapCountRef.current = 0;
+      lastTapRef.current = 0;
+      tapTimerRef.current = null;
+      setTapToast(false);
+    }, 5000);
+  };
 
   const handleGlobalSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -240,9 +278,6 @@ export function HomePage({
                   {t.exploreBtn}
                 </button>
               </div>
-
-              {/* Visible Pi Testnet Verification Button (No Login Wall) */}
-              <PiTestnetPaymentButton compact />
 
               {/* Compact utility controls (Theme + Language + Reference Currency) */}
               <div className="pt-3 flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800">
@@ -915,7 +950,12 @@ export function HomePage({
       <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#081024] py-12">
         <div className="mx-auto max-w-[1280px] px-4 sm:px-6 grid grid-cols-1 md:grid-cols-12 gap-8">
           <div className="md:col-span-4 space-y-3">
-            <BrandLogo size="md" />
+            <div
+              onClick={handleFooterLogoTap}
+              className="inline-block select-none touch-manipulation"
+            >
+              <BrandLogo size="md" />
+            </div>
             <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">{t.slogan}</p>
             <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed max-w-xs">
               Global Digital Empowerment Network uniting education, entrepreneurship, freelance collaboration, verified opportunities, and Pi-powered commerce.
@@ -985,15 +1025,6 @@ export function HomePage({
             >
               {user ? 'Member Dashboard' : 'Member Sign In'}
             </button>
-            {user?.roles.some((r) => ['super_admin', 'moderator', 'finance_admin'].includes(r)) && (
-              <button
-                type="button"
-                onClick={() => onNavigateView('admin')}
-                className="block font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
-              >
-                Global Admin Console
-              </button>
-            )}
           </div>
         </div>
 
@@ -1002,6 +1033,15 @@ export function HomePage({
           <span>Pi Network is the exclusive platform payment method (Testnet Active). Reference rates are informational only.</span>
         </div>
       </footer>
+
+      {tapToast && (
+        <div
+          role="status"
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 rounded-lg bg-slate-900/90 dark:bg-slate-800/95 text-white text-xs font-medium shadow-lg pointer-events-none"
+        >
+          Keep tapping...
+        </div>
+      )}
     </div>
   );
 }

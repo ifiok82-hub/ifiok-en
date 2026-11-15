@@ -12,6 +12,7 @@ import {
 
 interface PiTestnetPaymentButtonProps {
   compact?: boolean;
+  onPaymentSuccess?: (receipt: TestnetPaymentSuccess) => void;
 }
 
 type PaymentUiState =
@@ -21,7 +22,7 @@ type PaymentUiState =
   | { status: 'cancelled'; message: string }
   | { status: 'error'; message: string };
 
-export function PiTestnetPaymentButton({ compact = false }: PiTestnetPaymentButtonProps) {
+export function PiTestnetPaymentButton({ compact = false, onPaymentSuccess }: PiTestnetPaymentButtonProps) {
   const [state, setState] = useState<PaymentUiState>({ status: 'idle' });
   const [piAuth, setPiAuth] = useState<PiAuthSession | null>(() => getStoredPiAuth());
 
@@ -57,6 +58,7 @@ export function PiTestnetPaymentButton({ compact = false }: PiTestnetPaymentButt
       });
       setPiAuth(getStoredPiAuth());
       setState({ status: 'success', receipt });
+      onPaymentSuccess?.(receipt);
     } catch (err) {
       if (err instanceof PiPaymentCancelledError) {
         setState({ status: 'cancelled', message: 'Payment cancelled' });
@@ -72,13 +74,13 @@ export function PiTestnetPaymentButton({ compact = false }: PiTestnetPaymentButt
   return (
     <div
       className={`rounded-xl border border-amber-400/40 dark:border-amber-500/30 bg-amber-50/70 dark:bg-[#0D152B] ${
-        compact ? 'p-4' : 'p-5'
+        compact ? 'p-4' : 'p-6'
       } space-y-3`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <span className="inline-flex items-center gap-1.5 font-semibold text-purple-800 dark:text-amber-300">
           <ShieldCheck className="w-4 h-4 shrink-0" />
-          <span>Pi Developer Portal · Sandbox Testnet Verification</span>
+          <span>Pi Developer Portal - Sandbox Testnet Verification</span>
         </span>
         <span className="font-mono text-[11px] text-slate-600 dark:text-slate-300">
           {piAuth ? `Connected: @${piAuth.username}` : 'Not Connected - Tap Connect with Pi'}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AdminDashboard } from './components/AdminDashboard.tsx';
 import { AuthModal } from './components/AuthModal.tsx';
 import { DivisionsView } from './components/DivisionsView.tsx';
+import { HiddenAdminPortal } from './components/HiddenAdminPortal.tsx';
 import { HomePage } from './components/HomePage.tsx';
 import { LegalModal, LegalPage, type PolicyKey } from './components/LegalModal.tsx';
 import { MemberDashboard } from './components/MemberDashboard.tsx';
@@ -113,7 +113,17 @@ function parseRouteFromLocation(): { view: AppView; division: DivisionTab; acade
 
 export default function App() {
   const initialRoute = parseRouteFromLocation();
-  const [view, setView] = useState<AppView>(initialRoute.view === 'dashboard' || initialRoute.view === 'admin' ? 'home' : initialRoute.view);
+  const [adminUnlocked, setAdminUnlocked] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.sessionStorage.getItem('ifiok_admin_unlocked') === '1';
+  });
+  const [view, setView] = useState<AppView>(
+    initialRoute.view === 'dashboard'
+      ? 'home'
+      : initialRoute.view === 'admin' && (typeof window === 'undefined' || window.sessionStorage.getItem('ifiok_admin_unlocked') !== '1')
+      ? 'home'
+      : initialRoute.view
+  );
   const [divisionTab, setDivisionTab] = useState<DivisionTab>(initialRoute.division);
   const [academySubView, setAcademySubView] = useState<AcademySubView>(initialRoute.academySubView);
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -177,8 +187,8 @@ export default function App() {
       const parsed = parseRouteFromLocation();
       if (parsed.view === 'dashboard' && !user) {
         setView('home');
-      } else if (parsed.view === 'admin' && !user?.roles.some((r) => ['super_admin', 'moderator', 'finance_admin'].includes(r))) {
-        setView(user ? 'dashboard' : 'home');
+      } else if (parsed.view === 'admin' && !adminUnlocked) {
+        setView('home');
       } else {
         setView(parsed.view);
       }
@@ -187,7 +197,7 @@ export default function App() {
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [user]);
+  }, [user, adminUnlocked]);
 
   const syncUrl = useCallback((nextView: AppView, nextDiv: DivisionTab, nextAcademySub: AcademySubView = 'courses') => {
     if (typeof window === 'undefined') return;
@@ -330,16 +340,13 @@ export default function App() {
       const parsed = parseRouteFromLocation();
       if (parsed.view === 'dashboard') {
         setView('dashboard');
-      } else if (
-        parsed.view === 'admin' &&
-        res.user.roles.some((r) => ['super_admin', 'moderator', 'finance_admin'].includes(r))
-      ) {
+      } else if (parsed.view === 'admin' && adminUnlocked) {
         setView('admin');
       }
     } catch {
       setUser(null);
     }
-  }, []);
+  }, [adminUnlocked]);
 
   useEffect(() => {
     loadSummary();
@@ -366,19 +373,25 @@ export default function App() {
     syncUrl('home', divisionTab);
   };
 
+  const handleUnlockAdmin = () => {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('ifiok_admin_unlocked', '1');
+    }
+    setAdminUnlocked(true);
+    setView('admin');
+    syncUrl('admin', divisionTab);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleNavigateView = (next: AppView) => {
     if (next === 'dashboard' && !user) {
       handleOpenAuth('login');
       return;
     }
-    if (next === 'admin') {
-      const allowed = user?.roles.some((r) => ['super_admin', 'moderator', 'finance_admin'].includes(r));
-      if (!allowed) {
-        const fallback = user ? 'dashboard' : 'home';
-        setView(fallback);
-        syncUrl(fallback, divisionTab);
-        return;
-      }
+    if (next === 'admin' && !adminUnlocked) {
+      setView('home');
+      syncUrl('home', divisionTab);
+      return;
     }
     setView(next);
     syncUrl(next, divisionTab);
@@ -424,6 +437,7 @@ export default function App() {
           onOpenDivision={handleOpenDivision}
           onNavigateView={handleNavigateView}
           onOpenPolicy={setActivePolicy}
+          onUnlockAdmin={handleUnlockAdmin}
         />
       )}
 
@@ -461,9 +475,28 @@ export default function App() {
         />
       )}
 
-      {view === 'admin' && user && (
-        <AdminDashboard
+      {view === 'admin' && (
+        <HiddenAdminPortal
+          adminUnlocked={adminUnlocked}
+          piAuth={piAuth}
           user={user}
+          onConnectPi={async () => {
+            const session = await connectWithPi();
+            setPiAuth(session);
+            void loadSession();
+          }}
+          onLogoutAdmin={async () => {
+            await logoutPi();
+            setPiAuth(null);
+            setUser(null);
+            if (typeof window !== 'undefined') {
+              window.sessionStorage.removeItem('ifiok_admin_unlocked');
+            }
+            setAdminUnlocked(false);
+            setView('home');
+            syncUrl('home', divisionTab);
+          }}
+          onBackHome={() => handleNavigateView('home')}
           onNavigateView={handleNavigateView}
           onRefreshSummary={loadSummary}
         />

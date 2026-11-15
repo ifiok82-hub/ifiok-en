@@ -238,7 +238,9 @@ export default function App() {
       el.setAttribute('content', content);
     };
 
-    const canonicalUrl = `${window.location.origin}${window.location.pathname}`;
+    const origin = 'https://ifiok-en.vercel.app';
+    const cleanPath = window.location.pathname === '/' ? '' : window.location.pathname.replace(/\/+$/, '');
+    const canonicalUrl = `${origin}${cleanPath}`;
     setMeta('meta[name="description"]', 'name', 'description', seo.description);
     setMeta('meta[property="og:title"]', 'property', 'og:title', seo.title);
     setMeta('meta[property="og:description"]', 'property', 'og:description', seo.description);
@@ -252,14 +254,13 @@ export default function App() {
     }
     canonicalLink.setAttribute('href', canonicalUrl);
 
-    const origin = window.location.origin;
     const graph: Array<Record<string, unknown>> = [
       {
         '@type': 'Organization',
         name: 'IFIOK-EN — Global Digital Empowerment Network',
         url: origin,
         slogan: 'Empower. Connect. Earn. Grow.',
-        email: summary?.settings.supportEmail || 'support@ifiok-en.org',
+        email: 'ifiok82@gmail.com',
       },
       {
         '@type': 'WebSite',
@@ -472,6 +473,7 @@ export default function App() {
           usdRate={summary?.settings.informationalUsdPerPi ?? 1.0}
           onRequireAuth={() => handleOpenAuth('login')}
           onRefreshSummary={loadSummary}
+          onNavigateView={(next) => handleNavigateView(next)}
         />
       )}
 

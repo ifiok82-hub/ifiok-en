@@ -1,11 +1,20 @@
 {
   "rewrites": [
     {
-      "source": "/((?!api/|assets/|pi-app-validation\\.txt|validation-key\\.txt|robots\\.txt|sitemap\\.xml).*)",
+      "source": "/((?!api/|assets/|\\.well-known/|pi-app-validation\\.txt|validation-key\\.txt|robots\\.txt|sitemap\\.xml|manifest\\.json).*)",
       "destination": "/index.html"
     }
   ],
   "headers": [
+    {
+      "source": "/.well-known/pi-validation",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "text/plain; charset=utf-8"
+        }
+      ]
+    },
     {
       "source": "/(.*)",
       "headers": [

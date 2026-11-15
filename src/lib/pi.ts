@@ -27,7 +27,7 @@ export interface PiAuthSession {
 }
 
 interface PiSDK {
-  init: (config: { version: string }) => void | Promise<void>;
+  init: (config: { version: string; sandbox?: boolean }) => void | Promise<void>;
   authenticate: (
     scopes: string[],
     onIncompletePaymentFound: (payment: PiIncompletePayment) => void
@@ -113,7 +113,7 @@ export async function initPiTestnet(force = false): Promise<boolean> {
   if (!isPiSdkAvailable()) return false;
   if (!initialized || force) {
     initPromise = (async () => {
-      await window.Pi!.init({ version: '2.0' });
+      await window.Pi!.init({ version: '2.0', sandbox: true });
       initialized = true;
       return true;
     })();
@@ -196,8 +196,8 @@ export async function connectWithPi(
     );
   }
 
-  // Await Pi.init({ version: "2.0" }) fully before calling Pi.authenticate(...)
-  await window.Pi.init({ version: '2.0' });
+  // Await Pi.init({ version: "2.0", sandbox: true }) fully before calling Pi.authenticate(...)
+  await window.Pi.init({ version: '2.0', sandbox: true });
   initialized = true;
 
   const auth = await window.Pi.authenticate(scopes, handleIncompletePaymentFound);
@@ -319,7 +319,7 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
     );
   }
 
-  await window.Pi.init({ version: '2.0' });
+  await window.Pi.init({ version: '2.0', sandbox: true });
   initialized = true;
 
   // Ensure server-verified Pi authentication with payments scope is active in current runtime

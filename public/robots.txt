@@ -1,0 +1,15 @@
+User-agent: *
+Allow: /
+Allow: /privacy
+Allow: /terms
+Allow: /ifiok-school
+Allow: /ifiok-professor
+Allow: /business-hub
+Allow: /freelance
+Allow: /opportunities
+Allow: /market
+Allow: /community
+Disallow: /api/
+Disallow: /admin
+Disallow: /dashboard
+Sitemap: https://ifiok-en.vercel.app/sitemap.xml

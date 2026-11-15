@@ -1052,22 +1052,30 @@ export function HomePage({
                 ['seller', 'Seller & Creator Policy'],
                 ['community', 'Community Guidelines'],
               ] as Array<[PolicyKey, string]>
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => {
-                  if (key === 'privacy' || key === 'terms') {
+            ).map(([key, label]) =>
+              key === 'privacy' || key === 'terms' ? (
+                <a
+                  key={key}
+                  href={`/${key}`}
+                  onClick={(e) => {
+                    e.preventDefault();
                     onNavigateView(key);
-                  } else {
-                    onOpenPolicy(key);
-                  }
-                }}
-                className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
-              >
-                {label}
-              </button>
-            ))}
+                  }}
+                  className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
+                >
+                  {label}
+                </a>
+              ) : (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onOpenPolicy(key)}
+                  className="block text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white cursor-pointer"
+                >
+                  {label}
+                </button>
+              )
+            )}
           </div>
 
           <div className="md:col-span-2 space-y-2 text-xs">

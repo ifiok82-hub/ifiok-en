@@ -31,19 +31,23 @@ export const POLICIES: Record<
   },
   privacy: {
     title: 'IFIOK-EN Privacy Policy',
-    updated: 'Effective November 2026',
+    updated: 'Last Updated: November 15, 2026',
     sections: [
       {
-        heading: '1. Data Minimization & Consent',
-        body: 'Personal contact details including email addresses, international phone numbers, and Pi Network identifiers are stored strictly for authentication, order reconciliation, and authorized administrative governance. Private contact fields are never exposed in public member directories.',
+        heading: '1. Data We Collect (Pi Network & Account Profile)',
+        body: 'When you sign in with Pi Network on IFIOK-EN (https://ifiok-en.vercel.app), we collect only the authorized Pi account fields permitted by you: Pi username, Pi unique user identifier (UID), Pi wallet address (when wallet_address scope is granted), and Pi authentication access token (exchanged securely with Pi App Studio and Pi Platform APIs). If you create an optional email account, we store your full name, email address, country, and time zone strictly for authentication and order governance.',
       },
       {
-        heading: '2. Pi Network Authentication & Payment Records',
-        body: 'When you authenticate or perform Testnet payments via Pi Browser, only your authorized Pi username, UID, payment identifier, and blockchain transaction ID (txid) are verified and recorded to reconcile your transaction state.',
+        heading: '2. Pi Testnet Payments & Order Reconciliation',
+        body: 'All eligible platform payments execute on Pi Network Testnet (sandbox mode) using the IFIOK-EN Testnet App Wallet (GDD4KZEBDEJMYJYP6O5SCBHE5GGIF6K3RTHCF4ZGIWWIPGAHLTTXZB2O). We record the Pi payment identifier (paymentId), Pi amount, payment memo, and blockchain transaction ID (txid) strictly to approve, verify, and reconcile your orders and course enrolments. We never sell or share private data with third parties.',
       },
       {
-        heading: '3. Security Controls & Audit Trails',
-        body: 'Passwords are hashed using industry-standard adaptive bcrypt. Sessions rely on HTTP-only signed tokens, rate-limited endpoints, and immutable security audit trails.',
+        heading: '3. Cookies & Browser Storage',
+        body: 'IFIOK-EN uses essential HTTP-only signed session cookies for authentication security and local browser storage (pi_auth, pi_access_token, pi_user, piappstudio_session, theme, and language settings) to keep you signed in across page reloads and enable Pi App Studio session verification. We do not use advertising trackers.',
+      },
+      {
+        heading: '4. Security Controls & Data Deletion Contact',
+        body: 'Passwords are hashed using adaptive bcrypt, endpoints are rate-limited, and administrative actions follow strict role-based access control. To request access, correction, or deletion of your personal data, contact the IFIOK-EN privacy team directly at ifiok82@gmail.com or support@ifiok-en.org.',
       },
     ],
   },
@@ -195,6 +199,32 @@ export function LegalPage({ policy, onBackHome, onSwitchPolicy }: LegalPageProps
           ))}
         </div>
       </article>
+
+      <footer className="border-t border-slate-200 dark:border-slate-800 pt-6 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
+        <span>© {new Date().getFullYear()} IFIOK-EN · Contact: ifiok82@gmail.com</span>
+        <div className="flex items-center gap-4">
+          <a
+            href="/privacy"
+            onClick={(e) => {
+              e.preventDefault();
+              onSwitchPolicy('privacy');
+            }}
+            className="hover:text-slate-950 dark:hover:text-white underline"
+          >
+            Privacy Policy
+          </a>
+          <a
+            href="/terms"
+            onClick={(e) => {
+              e.preventDefault();
+              onSwitchPolicy('terms');
+            }}
+            className="hover:text-slate-950 dark:hover:text-white underline"
+          >
+            Terms of Service
+          </a>
+        </div>
+      </footer>
     </main>
   );
 }

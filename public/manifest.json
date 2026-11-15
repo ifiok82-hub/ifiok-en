@@ -1,0 +1,20 @@
+{
+  "name": "IFIOK-EN — Global Digital Empowerment Network",
+  "short_name": "IFIOK-EN",
+  "description": "Empower. Connect. Earn. Grow. Global digital ecosystem uniting IFIOK SCHOOL, SME business services, freelance work, verified opportunities, and Pi commerce.",
+  "start_url": "https://ifiok-en.vercel.app/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#070C1B",
+  "theme_color": "#0E1A36",
+  "homepage_url": "https://ifiok-en.vercel.app",
+  "pios_compatible": true,
+  "repository": "https://github.com/ifiok82-hub/ifiok-en",
+  "icons": [
+    {
+      "src": "/assets/aistudio/IFIOK-EN-Logo-1024x1024_f53d04a7.jpg",
+      "sizes": "1024x1024",
+      "type": "image/jpeg"
+    }
+  ]
+}

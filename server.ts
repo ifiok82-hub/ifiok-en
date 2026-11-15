@@ -84,7 +84,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', platform: 'IFIOK-EN', environment: 'testnet' });
 });
 
-app.get('/validation-key.txt', (_req, res) => {
+app.get(['/validation-key.txt', '/.well-known/pi-validation'], (_req, res) => {
   const keyPath = path.resolve(process.cwd(), 'public', 'validation-key.txt');
   if (fs.existsSync(keyPath)) {
     res.type('text/plain; charset=utf-8');

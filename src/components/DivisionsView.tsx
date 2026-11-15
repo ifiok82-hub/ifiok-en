@@ -48,6 +48,7 @@ interface DivisionsViewProps {
   usdRate: number;
   onRequireAuth: () => void;
   onRefreshSummary: () => void;
+  onNavigateView?: (view: 'privacy' | 'terms') => void;
 }
 
 interface CartItem {
@@ -75,6 +76,7 @@ export function DivisionsView({
   usdRate,
   onRequireAuth,
   onRefreshSummary,
+  onNavigateView,
 }: DivisionsViewProps) {
   const [loading, setLoading] = useState(false);
   const [bannerMsg, setBannerMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -1686,6 +1688,38 @@ export function DivisionsView({
           </div>
         </div>
       )}
+
+      <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#081024] mt-10 py-6">
+        <div className="mx-auto max-w-[1280px] px-4 sm:px-6 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
+          <span>© {new Date().getFullYear()} IFIOK-EN · Contact: ifiok82@gmail.com</span>
+          <div className="flex items-center gap-4">
+            <a
+              href="/privacy"
+              onClick={(e) => {
+                if (onNavigateView) {
+                  e.preventDefault();
+                  onNavigateView('privacy');
+                }
+              }}
+              className="hover:text-slate-950 dark:hover:text-white underline"
+            >
+              Privacy Policy
+            </a>
+            <a
+              href="/terms"
+              onClick={(e) => {
+                if (onNavigateView) {
+                  e.preventDefault();
+                  onNavigateView('terms');
+                }
+              }}
+              className="hover:text-slate-950 dark:hover:text-white underline"
+            >
+              Terms of Service
+            </a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

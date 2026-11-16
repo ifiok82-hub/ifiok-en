@@ -1,4 +1,5 @@
-export const APP_STUDIO_SESSION = 'piappstudio-RsKPKVTM5NR6Lji7gF8t3PUN29yGIUqI';
+export const SESSION = 'piappstudio-RsKPKVTM5NR6Lji7gF8t3PUN29yGIUqI';
+export const APP_STUDIO_SESSION = SESSION;
 const APP_STUDIO_STORAGE_KEY = 'piappstudio_session';
 
 export interface AppStudioPiUser {
@@ -29,7 +30,7 @@ function extractSessionFromWindowName(): string | null {
 }
 
 export function getAppStudioSession(): string {
-  if (typeof window === 'undefined') return APP_STUDIO_SESSION;
+  if (typeof window === 'undefined') return SESSION;
   try {
     const params = new URLSearchParams(window.location.search);
     const fromUrl = (params.get('piappstudio') || params.get('session') || '').trim();
@@ -44,14 +45,13 @@ export function getAppStudioSession(): string {
   } catch {
     // Fallback cleanly if storage is restricted
   }
-  return APP_STUDIO_SESSION;
+  return SESSION;
 }
 
 export function sendTokenToAppStudio(accessToken: string, user?: AppStudioPiUser | null): void {
   if (typeof window === 'undefined' || !accessToken) return;
   const activeSession = getAppStudioSession();
-  const payload = {
-    type: 'piappstudio-auth',
+  const base = {
     sessionId: activeSession,
     session: activeSession,
     piappstudio: activeSession,
@@ -59,27 +59,44 @@ export function sendTokenToAppStudio(accessToken: string, user?: AppStudioPiUser
     token: accessToken,
     username: user?.username,
     uid: user?.uid,
-    user,
+    user: user || null,
     app: 'ifiok-en',
     timestamp: Date.now(),
   };
 
-  const targets: Window[] = [];
-  if (window.parent) targets.push(window.parent);
-  if (window.top && window.top !== window.parent) targets.push(window.top);
-  if (targets.length === 0) targets.push(window);
+  const variants = [
+    { ...base, type: 'piappstudio-auth' },
+    { ...base, type: 'PI_AUTH' },
+    { ...base, type: 'pi-auth' },
+    { ...base, type: 'APP_STUDIO_AUTH' },
+    { ...base, type: 'pi_auth_success' },
+    { ...base, type: 'PI_ACCESS_TOKEN' },
+  ];
 
-  for (const target of targets) {
+  for (const p of variants) {
     try {
-      target.postMessage(payload, '*');
-      target.postMessage({ ...payload, type: 'PI_AUTH' }, '*');
-      target.postMessage({ ...payload, type: 'pi-auth' }, '*');
-      target.postMessage({ ...payload, type: 'APP_STUDIO_AUTH' }, '*');
-      target.postMessage(JSON.stringify(payload), '*');
+      window.parent.postMessage(p, '*');
     } catch {
-      // Ignore cross-origin postMessage restrictions cleanly
+      // Ignore cross-origin postMessage restriction
+    }
+    try {
+      window.top?.postMessage(p, '*');
+    } catch {
+      // Ignore cross-origin postMessage restriction
+    }
+    try {
+      window.parent.postMessage(JSON.stringify(p), '*');
+    } catch {
+      // Ignore cross-origin postMessage restriction
+    }
+    try {
+      window.top?.postMessage(JSON.stringify(p), '*');
+    } catch {
+      // Ignore cross-origin postMessage restriction
     }
   }
+
+  console.log('[AppStudio] token sent', user?.username || '');
 }
 
 let bridgeRegistered = false;
@@ -90,22 +107,33 @@ export function initAppStudioBridge(): () => void {
   // Capture any ?piappstudio= / ?session= / window.name session ID on page load
   getAppStudioSession();
 
+  // If a token was previously persisted in this preview session, emit it on mount too
+  try {
+    const existingToken = window.localStorage.getItem('pi_access_token');
+    const existingUser = JSON.parse(window.localStorage.getItem('pi_user') || 'null') as AppStudioPiUser | null;
+    if (existingToken) {
+      sendTokenToAppStudio(existingToken, existingUser);
+    }
+  } catch {
+    // Ignore storage read failure
+  }
+
   if (bridgeRegistered) return () => undefined;
   bridgeRegistered = true;
 
-  const onMessage = (event: MessageEvent) => {
-    let data: unknown = event.data;
-    if (typeof data === 'string') {
+  const onMessage = (e: MessageEvent) => {
+    let parsed: unknown = e.data;
+    if (typeof parsed === 'string') {
       try {
-        data = JSON.parse(data);
+        parsed = JSON.parse(parsed);
       } catch {
-        // Keep raw string check
+        // Keep string
       }
     }
 
     // Capture incoming session ID if provided by parent App Studio container
-    if (data && typeof data === 'object') {
-      const obj = data as Record<string, unknown>;
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>;
       const incomingSession =
         (typeof obj.piappstudio === 'string' && obj.piappstudio) ||
         (typeof obj.session === 'string' && obj.session) ||
@@ -120,18 +148,25 @@ export function initAppStudioBridge(): () => void {
       }
     }
 
-    const serialized = typeof event.data === 'string' ? event.data : JSON.stringify(event.data || '');
-    const asksForToken = /piappstudio|pi_auth|pi-auth|app_studio|handshake|request|token|session|ping/i.test(
-      serialized
-    );
+    const d = parsed as { type?: string; action?: string } | string | null;
+    const t = typeof d === 'string' ? d : String(d?.type || d?.action || '');
+    const lower = t.toLowerCase();
 
-    if (asksForToken) {
+    if (
+      lower.includes('appstudio') ||
+      lower.includes('pi_auth') ||
+      lower.includes('pi-auth') ||
+      lower.includes('handshake') ||
+      t === 'REQUEST_AUTH' ||
+      t === 'GET_TOKEN' ||
+      t === 'REQUEST_TOKEN' ||
+      t === 'PING'
+    ) {
       try {
         const token = window.localStorage.getItem('pi_access_token');
-        const rawUser = window.localStorage.getItem('pi_user');
-        const parsedUser = rawUser ? (JSON.parse(rawUser) as AppStudioPiUser) : null;
+        const user = JSON.parse(window.localStorage.getItem('pi_user') || 'null') as AppStudioPiUser | null;
         if (token) {
-          sendTokenToAppStudio(token, parsedUser);
+          sendTokenToAppStudio(token, user);
         }
       } catch {
         // Ignore storage read failure

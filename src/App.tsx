@@ -14,6 +14,7 @@ import {
   getStoredPiAuth,
   logoutPi,
   PI_AUTH_EVENT,
+  revalidateStoredPiAuth,
   waitForPiSdk,
   type PiAuthSession,
 } from './lib/pi.ts';
@@ -175,6 +176,7 @@ export default function App() {
   useEffect(() => {
     const cleanupBridge = initAppStudioBridge();
     void waitForPiSdk(6000);
+    void revalidateStoredPiAuth().then((valid) => setPiAuth(valid));
     const syncPi = () => setPiAuth(getStoredPiAuth());
     window.addEventListener(PI_AUTH_EVENT, syncPi);
     window.addEventListener('storage', syncPi);

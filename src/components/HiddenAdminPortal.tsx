@@ -190,7 +190,7 @@ export function HiddenAdminPortal({
               className="w-full inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-lg bg-gradient-to-r from-[#4C1D95] to-[#0E1A36] hover:from-[#5B21B6] hover:to-[#172952] dark:from-amber-500 dark:to-amber-400 text-white dark:text-slate-950 text-sm font-bold cursor-pointer disabled:opacity-60"
             >
               <LogIn className="w-4 h-4" />
-              <span>{connecting ? 'Connecting Pi...' : 'Connect with Pi'}</span>
+              <span>{connecting ? 'Signing in...' : 'Sign in with Pi'}</span>
             </button>
 
             <button

@@ -113,7 +113,7 @@ export async function initPiTestnet(force = false): Promise<boolean> {
   if (!isPiSdkAvailable()) return false;
   if (!initialized || force) {
     initPromise = (async () => {
-      await window.Pi!.init({ version: '2.0', sandbox: true });
+      await window.Pi!.init({ version: '2.0' });
       initialized = true;
       return true;
     })();
@@ -196,8 +196,8 @@ export async function connectWithPi(
     );
   }
 
-  // Await Pi.init({ version: "2.0", sandbox: true }) fully before calling Pi.authenticate(...)
-  await window.Pi.init({ version: '2.0', sandbox: true });
+  // Await Pi.init({ version: "2.0" }) so SDK auto-detects App Studio / Pi Browser runtime cleanly
+  await window.Pi.init({ version: '2.0' });
   initialized = true;
 
   const auth = await window.Pi.authenticate(scopes, handleIncompletePaymentFound);
@@ -212,15 +212,21 @@ export async function connectWithPi(
   }
 
   const appStudioSession = getAppStudioSession();
+  const browserUser = auth?.user || null;
   if (typeof window !== 'undefined') {
     window.localStorage.setItem('pi_access_token', accessToken);
-    if (auth?.user) {
-      window.localStorage.setItem('pi_user', JSON.stringify(auth.user));
+    if (browserUser) {
+      window.localStorage.setItem('pi_user', JSON.stringify(browserUser));
     }
   }
 
-  // Send immediate postMessage token relay so App Studio listener receives it promptly
-  sendTokenToAppStudio(accessToken, auth?.user || null);
+  // Send immediate postMessage token relay & staggered retries right after Pi.authenticate() succeeds
+  sendTokenToAppStudio(accessToken, browserUser);
+  if (typeof window !== 'undefined') {
+    window.setTimeout(() => sendTokenToAppStudio(accessToken, browserUser), 500);
+    window.setTimeout(() => sendTokenToAppStudio(accessToken, browserUser), 2000);
+    window.setTimeout(() => sendTokenToAppStudio(accessToken, browserUser), 5000);
+  }
 
   // Exchange accessToken server-side via App Studio (/pi/auth/v1/login) & log appStudioSession
   const verifyRes = await fetch('/api/pi/auth', {
@@ -258,7 +264,7 @@ export async function connectWithPi(
     window.localStorage.setItem('pi_user', JSON.stringify(verifiedUser));
   }
 
-  // Emit verified user + token to App Studio immediately and at 500ms / 2000ms / 5000ms
+  // Re-emit verified user + token to App Studio immediately and at 500ms / 2000ms / 5000ms
   sendTokenToAppStudio(accessToken, verifiedUser);
   if (typeof window !== 'undefined') {
     window.setTimeout(() => sendTokenToAppStudio(accessToken, verifiedUser), 500);
@@ -285,6 +291,44 @@ export async function logoutPi(): Promise<void> {
     window.localStorage.removeItem('pi_user');
   }
   await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
+}
+
+export async function revalidateStoredPiAuth(): Promise<PiAuthSession | null> {
+  const cached = getStoredPiAuth();
+  if (!cached?.accessToken) return null;
+  try {
+    const appStudioSession = getAppStudioSession();
+    const res = await fetch('/api/pi/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        accessToken: cached.accessToken,
+        username: cached.username,
+        uid: cached.uid,
+        appStudioSession,
+      }),
+    });
+    if (res.status === 401 || res.status === 403) {
+      saveStoredPiAuth(null);
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem('pi_access_token');
+        window.localStorage.removeItem('pi_user');
+      }
+      return null;
+    }
+    if (res.ok) {
+      const data = (await res.json().catch(() => ({}))) as {
+        piUser?: { uid: string; username: string };
+      };
+      if (data.piUser?.uid && data.piUser?.username) {
+        sendTokenToAppStudio(cached.accessToken, data.piUser);
+      }
+    }
+  } catch {
+    // Preserve cached session if offline
+  }
+  return getStoredPiAuth();
 }
 
 export async function authenticateWithPi() {

@@ -49,41 +49,68 @@ export default async function handler(req: Req, res: Res) {
     // Exchange accessToken with App Studio; ignore any browser-supplied uid/username
     const appStudioRes = await fetch(APP_STUDIO_LOGIN_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://ifiok-en.vercel.app',
+        Referer: 'https://ifiok-en.vercel.app/',
+      },
       body: JSON.stringify({ accessToken }),
       signal: controller.signal,
     });
 
     if (!appStudioRes.ok) {
+      const errBody = await appStudioRes.text().catch(() => '');
       return sendJson(res, 401, {
         success: false,
         ok: false,
-        error: 'App Studio rejected the Pi accessToken.',
+        error: `App Studio rejected the Pi accessToken (${appStudioRes.status})${errBody ? `: ${errBody.slice(0, 160)}` : '.'}`,
       });
     }
 
-    const data = (await appStudioRes.json()) as {
+    const data = (await appStudioRes.json().catch(() => ({}))) as {
       sessionToken?: string;
+      token?: string;
+      uid?: string;
+      username?: string;
       user?: { uid?: string; username?: string };
+      data?: { sessionToken?: string; user?: { uid?: string; username?: string } };
     };
-    if (!data?.user?.uid || !data?.user?.username) {
+
+    let uid = data?.user?.uid || data?.data?.user?.uid || data?.uid || '';
+    let username = data?.user?.username || data?.data?.user?.username || data?.username || '';
+    const sessionToken = data?.sessionToken || data?.data?.sessionToken || data?.token || '';
+
+    // If App Studio accepted the token (200 OK) without full user fields, verify /v2/me server-side
+    if (!uid || !username) {
+      const meRes = await fetch('https://api.minepi.com/v2/me', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: controller.signal,
+      }).catch(() => null);
+      if (meRes && meRes.ok) {
+        const meData = (await meRes.json().catch(() => ({}))) as { uid?: string; username?: string };
+        uid = uid || meData.uid || '';
+        username = username || meData.username || '';
+      }
+    }
+
+    if (!uid || !username) {
       return sendJson(res, 401, { success: false, ok: false, error: 'Incomplete App Studio user identity.' });
     }
 
     console.log(
-      `[PI APPSTUDIO AUTH] verified @${data.user.username} (${data.user.uid}) session=${appStudioSession}`
+      `[PI APPSTUDIO AUTH] verified @${username} (${uid}) session=${appStudioSession}`
     );
 
     return sendJson(res, 200, {
       success: true,
       ok: true,
-      username: data.user.username,
-      uid: data.user.uid,
+      username,
+      uid,
       appStudioSession,
-      sessionToken: data.sessionToken || '',
+      sessionToken,
       piUser: {
-        uid: data.user.uid,
-        username: data.user.username,
+        uid,
+        username,
       },
     });
   } catch (err) {

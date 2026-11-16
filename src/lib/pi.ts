@@ -104,6 +104,22 @@ export function getStoredPiAuth(): PiAuthSession | null {
   }
 }
 
+function safeSetLocalStorage(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage restrictions in embedded WebViews
+  }
+}
+
+function safeRemoveLocalStorage(key: string) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage restrictions in embedded WebViews
+  }
+}
+
 export function saveStoredPiAuth(session: PiAuthSession | null) {
   if (typeof window === 'undefined') return;
   runtimePiAuth = session;
@@ -112,11 +128,16 @@ export function saveStoredPiAuth(session: PiAuthSession | null) {
   }
   if (session) {
     const serialized = JSON.stringify(session);
-    window.localStorage.setItem(PI_AUTH_STORAGE_KEY, serialized);
-    window.localStorage.setItem(LEGACY_PI_AUTH_STORAGE_KEY, serialized);
+    safeSetLocalStorage(PI_AUTH_STORAGE_KEY, serialized);
+    safeSetLocalStorage(LEGACY_PI_AUTH_STORAGE_KEY, serialized);
+    safeSetLocalStorage('pi_access_token', session.accessToken);
+    safeSetLocalStorage('pi_user', JSON.stringify({ uid: session.uid, username: session.username }));
+    window.__PI_ACCESS_TOKEN = session.accessToken;
+    window.__PI_USER = { uid: session.uid, username: session.username };
+    window.piAccessToken = session.accessToken;
   } else {
-    window.localStorage.removeItem(PI_AUTH_STORAGE_KEY);
-    window.localStorage.removeItem(LEGACY_PI_AUTH_STORAGE_KEY);
+    safeRemoveLocalStorage(PI_AUTH_STORAGE_KEY);
+    safeRemoveLocalStorage(LEGACY_PI_AUTH_STORAGE_KEY);
   }
   notifyPiAuthChanged(session);
 }
@@ -202,8 +223,44 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
   }
 }
 
+const APP_STUDIO_LOGIN_URL = 'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com/pi/auth/v1/login';
+
+async function sendAccessTokenDirectlyToAppStudio(accessToken: string): Promise<{
+  ok: boolean;
+  sessionToken?: string;
+  user?: { uid?: string; username?: string };
+}> {
+  try {
+    const res = await fetch(APP_STUDIO_LOGIN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessToken }),
+    });
+    if (!res.ok) {
+      return { ok: false };
+    }
+    const raw = (await res.json().catch(() => ({}))) as {
+      sessionToken?: string;
+      token?: string;
+      uid?: string;
+      username?: string;
+      user?: { uid?: string; username?: string };
+      data?: { sessionToken?: string; user?: { uid?: string; username?: string } };
+    };
+    const uid = raw.user?.uid || raw.data?.user?.uid || raw.uid;
+    const username = raw.user?.username || raw.data?.user?.username || raw.username;
+    return {
+      ok: true,
+      sessionToken: raw.sessionToken || raw.data?.sessionToken || raw.token || '',
+      user: uid || username ? { uid, username } : undefined,
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export async function connectWithPi(
-  scopes: string[] = ['username', 'payments', 'wallet_address']
+  scopes: string[] = ['username', 'payments']
 ): Promise<PiAuthSession> {
   const ready = await waitForPiSdk(5000);
   if (!ready || !window.Pi) {
@@ -212,16 +269,17 @@ export async function connectWithPi(
     );
   }
 
-  // Await Pi.init({ version: "2.0" }) so SDK auto-detects App Studio / Pi Browser runtime cleanly
-  await window.Pi.init({ version: '2.0' });
-  initialized = true;
+  if (!initialized) {
+    await window.Pi.init({ version: '2.0' });
+    initialized = true;
+  }
 
   const auth = await window.Pi.authenticate(scopes, handleIncompletePaymentFound);
   if (scopes.includes('payments')) {
     paymentScopeAuthorized = true;
   }
 
-  // Keep only the accessToken; server trusts App Studio exchange for verified uid/username
+  // Keep accessToken in memory + safe storage immediately so heartbeats work even if storage is restricted
   const accessToken = auth?.accessToken;
   if (!accessToken) {
     throw new Error('Pi Network authentication did not return a valid accessToken.');
@@ -230,13 +288,13 @@ export async function connectWithPi(
   const appStudioSession = getAppStudioSession();
   const browserUser = auth?.user || null;
   if (typeof window !== 'undefined') {
-    window.localStorage.setItem('pi_access_token', accessToken);
-    if (browserUser) {
-      window.localStorage.setItem('pi_user', JSON.stringify(browserUser));
-    }
     window.__PI_ACCESS_TOKEN = accessToken;
     window.__PI_USER = browserUser;
     window.piAccessToken = accessToken;
+    safeSetLocalStorage('pi_access_token', accessToken);
+    if (browserUser) {
+      safeSetLocalStorage('pi_user', JSON.stringify(browserUser));
+    }
   }
 
   // Start continuous App Studio heartbeat & send immediate + 1s..10s retries
@@ -244,50 +302,71 @@ export async function connectWithPi(
   sendTokenToAppStudioNow();
   broadcastTokenToAppStudio(accessToken, browserUser);
 
-  // Exchange accessToken server-side via App Studio (/pi/auth/v1/login) & log appStudioSession
-  const verifyRes = await fetch('/api/pi/auth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({
-      accessToken,
-      username: auth?.user?.username,
-      uid: auth?.user?.uid,
-      appStudioSession,
-    }),
-  });
+  // Send accessToken BOTH directly from browser to App Studio (/pi/auth/v1/login) AND via /api/pi/auth
+  const [directResult, serverResponse] = await Promise.all([
+    sendAccessTokenDirectlyToAppStudio(accessToken),
+    fetch('/api/pi/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        accessToken,
+        username: auth?.user?.username,
+        uid: auth?.user?.uid,
+        appStudioSession,
+      }),
+    }).catch(() => null),
+  ]);
 
-  const verifyData = (await verifyRes.json().catch(() => ({}))) as {
-    success?: boolean;
-    ok?: boolean;
-    error?: string;
-    sessionToken?: string;
-    appStudioSession?: string;
-    piUser?: { uid: string; username: string };
-  };
+  const verifyData = serverResponse
+    ? ((await serverResponse.json().catch(() => ({}))) as {
+        success?: boolean;
+        ok?: boolean;
+        error?: string;
+        sessionToken?: string;
+        appStudioSession?: string;
+        piUser?: { uid?: string; username?: string };
+      })
+    : {};
 
-  if (!verifyRes.ok || (!verifyData.success && !verifyData.ok) || !verifyData.piUser?.uid || !verifyData.piUser?.username) {
-    throw new Error(verifyData.error || 'Server could not verify Pi Network authentication token with App Studio.');
+  const serverVerified = Boolean(
+    serverResponse?.ok && (verifyData.success || verifyData.ok) && verifyData.piUser?.uid && verifyData.piUser?.username
+  );
+
+  if (!serverVerified && !directResult.ok) {
+    throw new Error(
+      verifyData.error || 'Server could not verify Pi Network authentication token with App Studio.'
+    );
   }
 
-  // Store ONLY the App Studio-verified uid and username returned by the backend
+  const resolvedUid = verifyData.piUser?.uid || directResult.user?.uid || browserUser?.uid || '';
+  const resolvedUsername =
+    verifyData.piUser?.username || directResult.user?.username || browserUser?.username || '';
+
+  if (!resolvedUid || !resolvedUsername) {
+    throw new Error('Incomplete Pi Network user identity returned during verification.');
+  }
+
   const verifiedUser = {
-    uid: verifyData.piUser.uid,
-    username: verifyData.piUser.username,
+    uid: resolvedUid,
+    username: resolvedUsername,
   };
   if (typeof window !== 'undefined') {
-    window.localStorage.setItem('pi_access_token', accessToken);
-    window.localStorage.setItem('pi_user', JSON.stringify(verifiedUser));
+    window.__PI_ACCESS_TOKEN = accessToken;
+    window.__PI_USER = verifiedUser;
+    window.piAccessToken = accessToken;
+    safeSetLocalStorage('pi_access_token', accessToken);
+    safeSetLocalStorage('pi_user', JSON.stringify(verifiedUser));
   }
 
-  // Re-broadcast verified user + token across 0-5s windows
+  // Re-broadcast verified user + token across 0-10s windows
   broadcastTokenToAppStudio(accessToken, verifiedUser);
 
   const session: PiAuthSession = {
     username: verifiedUser.username,
     uid: verifiedUser.uid,
     accessToken,
-    sessionToken: verifyData.sessionToken,
+    sessionToken: verifyData.sessionToken || directResult.sessionToken,
     connectedAt: new Date().toISOString(),
   };
 
@@ -326,8 +405,8 @@ export async function revalidateStoredPiAuth(): Promise<PiAuthSession | null> {
     if (res.status === 401 || res.status === 403) {
       saveStoredPiAuth(null);
       if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('pi_access_token');
-        window.localStorage.removeItem('pi_user');
+        safeRemoveLocalStorage('pi_access_token');
+        safeRemoveLocalStorage('pi_user');
       }
       return null;
     }

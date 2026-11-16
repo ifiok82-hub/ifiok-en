@@ -21,7 +21,7 @@ export function AuthModal({ isOpen, onClose, onAuthenticated }: AuthModalProps) 
     setError('');
     setLoading(true);
     try {
-      const session = await connectWithPi(['username', 'payments', 'wallet_address']);
+      const session = await connectWithPi(['username', 'payments']);
       const meRes = await fetch('/api/auth/me', { credentials: 'include' }).catch(() => null);
       if (meRes && meRes.ok) {
         const data = (await meRes.json().catch(() => ({}))) as { user?: UserProfile | null };

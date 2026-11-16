@@ -1100,6 +1100,11 @@ export function HomePage({
                 {piLoading ? 'Signing in...' : 'Sign in with Pi'}
               </button>
             )}
+            {piHeroError && (
+              <p className="text-[11px] text-rose-600 dark:text-rose-400 leading-snug">
+                {piHeroError}
+              </p>
+            )}
             {user && (
               <button
                 type="button"

@@ -21,19 +21,28 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), 9000);
   try {
     const appStudioRes = await fetch(APP_STUDIO_LOGIN_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://ifiok-en.vercel.app',
+        Referer: 'https://ifiok-en.vercel.app/',
+      },
       body: JSON.stringify({ accessToken: headerToken }),
       signal: controller.signal,
     });
     if (!appStudioRes.ok) {
       return sendJson(res, 403, { success: false, ok: false, error: 'Access Denied - Admin Only' });
     }
-    const data = (await appStudioRes.json()) as { user?: { username?: string } };
-    if ((data?.user?.username || '').replace(/^@/, '').toLowerCase() !== 'ifiok1967') {
+    const data = (await appStudioRes.json().catch(() => ({}))) as {
+      username?: string;
+      user?: { username?: string };
+      data?: { user?: { username?: string } };
+    };
+    const username = data?.user?.username || data?.data?.user?.username || data?.username || '';
+    if (username.replace(/^@/, '').toLowerCase() !== 'ifiok1967') {
       return sendJson(res, 403, { success: false, ok: false, error: 'Access Denied - Admin Only' });
     }
 

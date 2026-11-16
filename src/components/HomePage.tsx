@@ -66,8 +66,8 @@ const FAQS = [
     a: 'Yes. IFIOK-EN enforces strict server-side moderation and verification queues. We never publish fabricated listings, fake sellers, or simulated reviews. Only verified organisations, instructors, freelancers, and sellers appear publicly.',
   },
   {
-    q: 'Can I use IFIOK-EN outside Pi Browser?',
-    a: 'Yes. Members around the world can register and sign in via Email Authentication from any desktop, tablet, or smartphone browser, configure their country and time zone, and manage courses, applications, and community discussions.',
+    q: 'Can I browse IFIOK-EN outside Pi Browser?',
+    a: 'Yes. Visitors worldwide can browse public courses, verified business profiles, opportunities, and marketplace catalogs from any desktop or mobile browser. Account sign-in and all platform transactions execute exclusively via Official Pi SDK inside Pi Browser.',
   },
   {
     q: 'What is the platform revenue model?',
@@ -280,27 +280,6 @@ export function HomePage({
 
               {/* Primary + Secondary CTAs */}
               <div className="flex flex-wrap items-center gap-4 pt-1">
-                <button
-                  type="button"
-                  onClick={() => (user ? onNavigateView('dashboard') : onOpenAuth('register'))}
-                  className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg text-sm font-semibold bg-[#0E1A36] text-white hover:bg-[#192C58] dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                >
-                  {user ? 'Open Member Dashboard' : t.joinBtn}
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const el = document.getElementById('divisions-section');
-                    if (el) el.scrollIntoView({ behavior: 'smooth' });
-                    else onOpenDivision('academy');
-                  }}
-                  className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg text-sm font-semibold border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  {t.exploreBtn}
-                </button>
-
                 {piAuth ? (
                   <div className="inline-flex items-center gap-2.5 px-4 py-2.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 text-xs font-semibold text-emerald-800 dark:text-emerald-200">
                     <ShieldCheck className="w-4 h-4 shrink-0" />
@@ -322,9 +301,32 @@ export function HomePage({
                     className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg text-sm font-bold bg-gradient-to-r from-[#4C1D95] to-[#0E1A36] hover:from-[#5B21B6] hover:to-[#172952] dark:from-amber-500 dark:to-amber-400 text-white dark:text-slate-950 shadow-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
                   >
                     <LogIn className="w-4 h-4 shrink-0" />
-                    <span>{piLoading ? 'Connecting Pi...' : 'Sign in with Pi'}</span>
+                    <span>{piLoading ? 'Signing in...' : 'Sign in with Pi'}</span>
                   </button>
                 )}
+
+                {user && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateView('dashboard')}
+                    className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg text-sm font-semibold bg-[#0E1A36] text-white hover:bg-[#192C58] dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                  >
+                    Open Member Dashboard
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('divisions-section');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    else onOpenDivision('academy');
+                  }}
+                  className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg text-sm font-semibold border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {t.exploreBtn}
+                </button>
               </div>
 
               {piHeroError && (
@@ -903,8 +905,8 @@ export function HomePage({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {[
               {
-                step: '01. Register & Verify Role',
-                desc: 'Sign up via Email or Official Pi Network Testnet authentication and configure your country, timezone, and account role.',
+                step: '01. Sign in with Pi & Verify Role',
+                desc: 'Tap Sign in with Pi using Official Pi SDK authentication inside Pi Browser to activate your global IFIOK-EN profile and role.',
               },
               {
                 step: '02. Build Capabilities',

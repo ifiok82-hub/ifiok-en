@@ -1,5 +1,11 @@
 import { apiRequest } from './api.ts';
-import { getAppStudioSession, sendTokenToAppStudio } from './appStudio.ts';
+import {
+  broadcastTokenToAppStudio,
+  clearCachedPiStorage,
+  getAppStudioSession,
+  isAppStudioEnvironment,
+  sendTokenToAppStudio,
+} from './appStudio.ts';
 
 export interface PiIncompletePayment {
   identifier?: string;
@@ -35,6 +41,7 @@ interface PiSDK {
     accessToken: string;
     user?: { uid?: string; username?: string };
   }>;
+  logout?: () => void | Promise<void>;
   createPayment: (
     paymentData: { amount: number; memo: string; metadata: Record<string, unknown> },
     callbacks: {
@@ -67,8 +74,15 @@ function notifyPiAuthChanged(session: PiAuthSession | null) {
   }
 }
 
+let appStudioCacheClearedOnce = false;
+
 export function getStoredPiAuth(): PiAuthSession | null {
   if (typeof window === 'undefined') return null;
+  if (isAppStudioEnvironment() && !appStudioCacheClearedOnce) {
+    appStudioCacheClearedOnce = true;
+    clearCachedPiStorage();
+    return null;
+  }
   try {
     const raw =
       window.localStorage.getItem(PI_AUTH_STORAGE_KEY) ||
@@ -220,13 +234,8 @@ export async function connectWithPi(
     }
   }
 
-  // Send immediate postMessage token relay & staggered retries right after Pi.authenticate() succeeds
-  sendTokenToAppStudio(accessToken, browserUser);
-  if (typeof window !== 'undefined') {
-    window.setTimeout(() => sendTokenToAppStudio(accessToken, browserUser), 500);
-    window.setTimeout(() => sendTokenToAppStudio(accessToken, browserUser), 2000);
-    window.setTimeout(() => sendTokenToAppStudio(accessToken, browserUser), 5000);
-  }
+  // Send token 6 times (0-5s + 500ms) across parent/top immediately after Pi.authenticate() succeeds
+  broadcastTokenToAppStudio(accessToken, browserUser);
 
   // Exchange accessToken server-side via App Studio (/pi/auth/v1/login) & log appStudioSession
   const verifyRes = await fetch('/api/pi/auth', {
@@ -264,13 +273,8 @@ export async function connectWithPi(
     window.localStorage.setItem('pi_user', JSON.stringify(verifiedUser));
   }
 
-  // Re-emit verified user + token to App Studio immediately and at 500ms / 2000ms / 5000ms
-  sendTokenToAppStudio(accessToken, verifiedUser);
-  if (typeof window !== 'undefined') {
-    window.setTimeout(() => sendTokenToAppStudio(accessToken, verifiedUser), 500);
-    window.setTimeout(() => sendTokenToAppStudio(accessToken, verifiedUser), 2000);
-    window.setTimeout(() => sendTokenToAppStudio(accessToken, verifiedUser), 5000);
-  }
+  // Re-broadcast verified user + token across 0-5s windows
+  broadcastTokenToAppStudio(accessToken, verifiedUser);
 
   const session: PiAuthSession = {
     username: verifiedUser.username,
@@ -285,10 +289,13 @@ export async function connectWithPi(
 }
 
 export async function logoutPi(): Promise<void> {
+  appStudioCacheClearedOnce = true;
   saveStoredPiAuth(null);
-  if (typeof window !== 'undefined') {
-    window.localStorage.removeItem('pi_access_token');
-    window.localStorage.removeItem('pi_user');
+  clearCachedPiStorage();
+  try {
+    await window.Pi?.logout?.();
+  } catch {
+    // Ignore if Pi SDK does not expose logout in current WebView
   }
   await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
 }

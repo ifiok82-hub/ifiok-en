@@ -34,8 +34,8 @@ export const POLICIES: Record<
     updated: 'Last Updated: November 15, 2026',
     sections: [
       {
-        heading: '1. Data We Collect (Pi Network & Account Profile)',
-        body: 'When you sign in with Pi Network on IFIOK-EN (https://ifiok-en.vercel.app), we collect only the authorized Pi account fields permitted by you: Pi username, Pi unique user identifier (UID), Pi wallet address (when wallet_address scope is granted), and Pi authentication access token (exchanged securely with Pi App Studio and Pi Platform APIs). If you create an optional email account, we store your full name, email address, country, and time zone strictly for authentication and order governance.',
+        heading: '1. Data We Collect (Pi Network Only)',
+        body: 'IFIOK-EN (https://ifiok-en.vercel.app) uses Official Pi SDK authentication exclusively. When you tap Sign in with Pi, we collect only the authorized Pi account fields permitted by you: Pi username, Pi unique user identifier (UID), Pi wallet address (when wallet_address scope is granted), and Pi authentication access token (verified with Pi App Studio and Pi Platform APIs).',
       },
       {
         heading: '2. Pi Testnet Payments & Order Reconciliation',
@@ -43,11 +43,11 @@ export const POLICIES: Record<
       },
       {
         heading: '3. Cookies & Browser Storage',
-        body: 'IFIOK-EN uses essential HTTP-only signed session cookies for authentication security and local browser storage (pi_auth, pi_access_token, pi_user, piappstudio_session, theme, and language settings) to keep you signed in across page reloads and enable Pi App Studio session verification. We do not use advertising trackers.',
+        body: 'IFIOK-EN uses essential HTTP-only signed session cookies for authentication security and local browser storage (pi_auth, pi_access_token, pi_user, piappstudio_session, theme, and language settings) to maintain active sessions and enable Pi App Studio session verification. We do not use advertising trackers.',
       },
       {
         heading: '4. Security Controls & Data Deletion Contact',
-        body: 'Passwords are hashed using adaptive bcrypt, endpoints are rate-limited, and administrative actions follow strict role-based access control. To request access, correction, or deletion of your personal data, contact the IFIOK-EN privacy team directly at ifiok82@gmail.com or support@ifiok-en.org.',
+        body: 'API endpoints are rate-limited, role permissions are enforced server-side, and administrative actions are logged in audit trails. To request access, correction, or deletion of your personal data, contact the IFIOK-EN privacy team directly at ifiok82@gmail.com or support@ifiok-en.org.',
       },
     ],
   },

@@ -37,7 +37,7 @@ export function Navbar({
     if (user) {
       onNavigateView('dashboard');
     } else {
-      onOpenAuth();
+      void handleConnectPiClick();
     }
     setMobileOpen(false);
   };
@@ -169,9 +169,10 @@ export function Navbar({
           <button
             type="button"
             onClick={handlePrimaryClick}
-            className="hidden sm:inline-flex items-center justify-center px-5 py-2.5 rounded-lg text-sm font-semibold bg-[#0E1A36] text-white hover:bg-[#192A54] dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+            disabled={piConnecting}
+            className="hidden sm:inline-flex items-center justify-center px-5 py-2.5 rounded-lg text-sm font-semibold bg-[#0E1A36] text-white hover:bg-[#192A54] dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:opacity-60"
           >
-            {user ? 'Dashboard' : t.joinBtn}
+            {user ? 'Dashboard' : piConnecting ? 'Signing in...' : 'Sign in with Pi'}
           </button>
 
           <button
@@ -212,9 +213,10 @@ export function Navbar({
           <button
             type="button"
             onClick={handlePrimaryClick}
-            className="w-full mt-2 px-4 py-3 rounded-lg text-sm font-semibold bg-[#0E1A36] text-white dark:bg-amber-500 dark:text-slate-950"
+            disabled={piConnecting}
+            className="w-full mt-2 px-4 py-3 rounded-lg text-sm font-semibold bg-[#0E1A36] text-white dark:bg-amber-500 dark:text-slate-950 disabled:opacity-60"
           >
-            {user ? 'Open Member Dashboard' : t.joinBtn}
+            {user ? 'Open Member Dashboard' : piConnecting ? 'Signing in...' : 'Sign in with Pi'}
           </button>
         </div>
       )}

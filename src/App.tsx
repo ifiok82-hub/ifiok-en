@@ -8,7 +8,7 @@ import { MemberDashboard } from './components/MemberDashboard.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { apiRequest } from './lib/api.ts';
 import { detectInitialLanguage, isRtlLanguage, LANGUAGE_OPTIONS } from './lib/i18n.ts';
-import { initAppStudioBridge } from './lib/appStudio.ts';
+import { initAppStudioBridge, isAppStudioEnvironment } from './lib/appStudio.ts';
 import {
   connectWithPi,
   getStoredPiAuth,
@@ -335,13 +335,18 @@ export default function App() {
 
   const loadSession = useCallback(async () => {
     try {
-      const res = await apiRequest<{ user: UserProfile }>('/api/auth/me');
-      setUser(res.user);
+      const res = await apiRequest<{ user: UserProfile | null }>('/api/auth/me');
+      const authUser = res?.user;
+      if (!authUser) {
+        setUser(null);
+        return;
+      }
+      setUser(authUser);
       if (
-        res.user.preferred_language &&
-        LANGUAGE_OPTIONS.some((l) => l.code === res.user.preferred_language)
+        authUser.preferred_language &&
+        LANGUAGE_OPTIONS.some((l) => l.code === authUser.preferred_language)
       ) {
-        setLanguage(res.user.preferred_language as LanguageCode);
+        setLanguage(authUser.preferred_language as LanguageCode);
       }
       const parsed = parseRouteFromLocation();
       if (parsed.view === 'dashboard') {
@@ -356,7 +361,9 @@ export default function App() {
 
   useEffect(() => {
     loadSummary();
-    loadSession();
+    if (!isAppStudioEnvironment()) {
+      loadSession();
+    }
   }, [loadSummary, loadSession]);
 
   const handleOpenDivision = (tab: DivisionTab, sub: AcademySubView = 'courses') => {

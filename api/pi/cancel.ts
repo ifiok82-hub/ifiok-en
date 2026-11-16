@@ -38,7 +38,7 @@ export default async function handler(req: Req, res: Res) {
     return sendJson(res, 400, { success: false, ok: false, error: 'paymentId is required.' });
   }
 
-  const piKey = process.env.PI_API_KEY?.trim();
+  const piKey = process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim();
   if (attemptServerCancel && piKey && piKey.length > 10) {
     await fetch(`${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/cancel`, {
       method: 'POST',

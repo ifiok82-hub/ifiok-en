@@ -27,6 +27,52 @@ function sendJson(res: Res, statusCode: number, payload: unknown) {
   res.end(JSON.stringify(payload));
 }
 
+interface PiPaymentRecord {
+  identifier?: string;
+  user_uid?: string;
+  amount?: number;
+  direction?: string;
+  network?: string;
+  metadata?: { app?: string; type?: string; [key: string]: unknown } | null;
+  status?: {
+    developer_approved?: boolean;
+    transaction_verified?: boolean;
+    developer_completed?: boolean;
+    cancelled?: boolean;
+    user_cancelled?: boolean;
+  };
+  transaction?: {
+    txid?: string;
+    verified?: boolean;
+  } | null;
+}
+
+function getPiApiKey(): string {
+  return process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim() || '';
+}
+
+function validateU2APayment(
+  payment: PiPaymentRecord,
+  expectedPaymentId: string
+): { valid: true } | { valid: false; statusCode: number; error: string } {
+  if (payment.identifier && payment.identifier !== expectedPaymentId) {
+    return { valid: false, statusCode: 400, error: 'Payment identifier mismatch.' };
+  }
+  if (payment.direction && payment.direction !== 'user_to_app') {
+    return { valid: false, statusCode: 400, error: `Invalid payment direction (${payment.direction}). Expected user_to_app.` };
+  }
+  if (payment.network && !payment.network.toLowerCase().includes('testnet')) {
+    return { valid: false, statusCode: 403, error: `Only Pi Testnet payments are permitted (received ${payment.network}).` };
+  }
+  if (typeof payment.amount !== 'number' || Math.abs(payment.amount - TESTNET_AMOUNT_PI) > 0.00001) {
+    return { valid: false, statusCode: 400, error: `Expected ${TESTNET_AMOUNT_PI} Pi, received ${payment.amount ?? 'unknown'}.` };
+  }
+  if (payment.metadata?.app && payment.metadata.app !== 'ifiok-en') {
+    return { valid: false, statusCode: 403, error: 'Payment metadata does not belong to IFIOK-EN.' };
+  }
+  return { valid: true };
+}
+
 export default async function handler(req: Req, res: Res) {
   if (req.method !== 'POST') {
     return sendJson(res, 405, { success: false, ok: false, error: 'Method Not Allowed' });
@@ -40,18 +86,68 @@ export default async function handler(req: Req, res: Res) {
     return sendJson(res, 400, { success: false, ok: false, error: 'paymentId and txid are required.' });
   }
 
-  const piKey = process.env.PI_API_KEY?.trim();
+  const piKey = getPiApiKey();
   if (!piKey || piKey.length <= 10) {
     return sendJson(res, 503, {
       success: false,
       ok: false,
-      error: 'PI_API_KEY is not configured in Vercel Environment Variables.',
+      error: 'PI_NETWORK_API_KEY is not configured on the server.',
     });
   }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
+    // 1. Inspect payment state before completion
+    const inspectRes = await fetch(`${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}`, {
+      headers: { Authorization: `Key ${piKey}` },
+      signal: controller.signal,
+    });
+    const inspectText = await inspectRes.text();
+    let inspected: PiPaymentRecord = {};
+    try {
+      inspected = inspectText ? (JSON.parse(inspectText) as PiPaymentRecord) : {};
+    } catch {
+      inspected = {};
+    }
+
+    if (!inspectRes.ok) {
+      return sendJson(res, 502, {
+        success: false,
+        ok: false,
+        error: `Pi payment verification lookup failed (${inspectRes.status}): ${inspectText}`,
+      });
+    }
+
+    const preCheck = validateU2APayment(inspected, paymentId);
+    if (!preCheck.valid) {
+      return sendJson(res, preCheck.statusCode, { success: false, ok: false, error: preCheck.error });
+    }
+
+    if (inspected.transaction?.txid && inspected.transaction.txid !== txid) {
+      return sendJson(res, 409, {
+        success: false,
+        ok: false,
+        error: 'Submitted txid does not match the transaction recorded on Pi Platform.',
+      });
+    }
+
+    const alreadyVerified = Boolean(inspected.status?.transaction_verified || inspected.transaction?.verified);
+    if (inspected.status?.developer_completed && alreadyVerified) {
+      return sendJson(res, 200, {
+        success: true,
+        ok: true,
+        completed: true,
+        alreadyCompleted: true,
+        paymentId,
+        txid,
+        amount: TESTNET_AMOUNT_PI,
+        status: 'completed',
+        environment: 'testnet',
+      });
+    }
+
+    // 2. Complete payment with Pi Platform API
     const completeRes = await fetch(`${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/complete`, {
       method: 'POST',
       headers: {
@@ -63,15 +159,9 @@ export default async function handler(req: Req, res: Res) {
     });
 
     const rawText = await completeRes.text();
-    let completedJson: {
-      amount?: number;
-      network?: string;
-      metadata?: { app?: string };
-      status?: { developer_completed?: boolean; transaction_verified?: boolean };
-      transaction?: { verified?: boolean };
-    } = {};
+    let completedJson: PiPaymentRecord = {};
     try {
-      completedJson = rawText ? JSON.parse(rawText) : {};
+      completedJson = rawText ? (JSON.parse(rawText) as PiPaymentRecord) : {};
     } catch {
       completedJson = {};
     }
@@ -85,20 +175,11 @@ export default async function handler(req: Req, res: Res) {
       });
     }
 
-    if (completedJson.network && !completedJson.network.toLowerCase().includes('testnet')) {
-      return sendJson(res, 403, {
-        success: false,
-        ok: false,
-        error: `Only Pi Testnet payments are permitted (received ${completedJson.network}).`,
-      });
+    const postCheck = validateU2APayment(completedJson, paymentId);
+    if (!postCheck.valid) {
+      return sendJson(res, postCheck.statusCode, { success: false, ok: false, error: postCheck.error });
     }
-    if (typeof completedJson.amount !== 'number' || Math.abs(completedJson.amount - TESTNET_AMOUNT_PI) > 0.00001) {
-      return sendJson(res, 400, {
-        success: false,
-        ok: false,
-        error: `Expected ${TESTNET_AMOUNT_PI} Pi, received ${completedJson.amount ?? 'unknown'}.`,
-      });
-    }
+
     const verified = Boolean(completedJson.status?.transaction_verified || completedJson.transaction?.verified);
     if (!completedJson.status?.developer_completed || !verified) {
       return sendJson(res, 400, {

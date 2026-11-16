@@ -12,9 +12,13 @@ export default function handler(_req: IncomingMessage, res: ServerResponse) {
       environment: 'testnet',
       sandbox: true,
       sdkVersion: '2.0',
+      direction: 'user_to_app',
       testAmountPi: 0.01,
       testnetWallet: process.env.PI_TESTNET_WALLET?.trim() || 'GDD4KZEBDEJMYJYP6O5SCBHE5GGIF6K3RTHCF4ZGIWWIPGAHLTTXZB2O',
-      piServerKeyConfigured: Boolean(process.env.PI_API_KEY && process.env.PI_API_KEY.trim().length > 10),
+      piServerKeyConfigured: Boolean(
+        (process.env.PI_NETWORK_API_KEY && process.env.PI_NETWORK_API_KEY.trim().length > 10) ||
+          (process.env.PI_API_KEY && process.env.PI_API_KEY.trim().length > 10)
+      ),
     })
   );
 }

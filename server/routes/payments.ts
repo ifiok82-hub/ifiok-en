@@ -13,7 +13,7 @@ import {
 const router = Router();
 
 function getPiApiKey(): string | null {
-  const key = process.env.PI_API_KEY?.trim();
+  const key = process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim();
   return key && key.length > 10 ? key : null;
 }
 
@@ -300,9 +300,9 @@ router.post('/pi/approve', requireAuth, async (req, res) => {
 
   const piKey = getPiApiKey();
   if (!piKey) {
-    recordSecurityEvent('pi_missing_api_key', 'warning', req.authUser!.id, req.ip || '', 'Attempted Pi payment approval without PI_API_KEY configured');
+    recordSecurityEvent('pi_missing_api_key', 'warning', req.authUser!.id, req.ip || '', 'Attempted Pi payment approval without PI_NETWORK_API_KEY configured');
     return res.status(503).json({
-      error: 'Pi Network server verification key (PI_API_KEY) is not configured on the server. Payment cannot be approved without live server verification.',
+      error: 'Pi Network server verification key (PI_NETWORK_API_KEY) is not configured on the server. Payment cannot be approved without live server verification.',
     });
   }
 
@@ -313,24 +313,46 @@ router.post('/pi/approve', requireAuth, async (req, res) => {
     if (!inspectRes.ok) {
       return res.status(502).json({ error: `Pi Platform API rejected payment lookup (${inspectRes.status}).` });
     }
-    const paymentData = (await inspectRes.json()) as { amount?: number; network?: string };
+    const paymentData = (await inspectRes.json()) as {
+      identifier?: string;
+      amount?: number;
+      direction?: string;
+      user_uid?: string;
+      network?: string;
+      metadata?: { orderId?: number | string; [key: string]: unknown } | null;
+      status?: { developer_approved?: boolean; cancelled?: boolean; user_cancelled?: boolean };
+    };
 
+    if (paymentData.direction && paymentData.direction !== 'user_to_app') {
+      return res.status(400).json({ error: `Invalid payment direction (${paymentData.direction}). Expected user_to_app.` });
+    }
+    if (req.authUser?.pi_uid && paymentData.user_uid && paymentData.user_uid !== req.authUser.pi_uid) {
+      return res.status(403).json({ error: 'Payment payer identity does not match authenticated user.' });
+    }
+    if (paymentData.metadata?.orderId && Number(paymentData.metadata.orderId) !== order.id) {
+      return res.status(400).json({ error: 'Payment metadata orderId mismatch.' });
+    }
     if (typeof paymentData.amount !== 'number' || Math.abs(paymentData.amount - order.total_pi) > 0.0001) {
       recordSecurityEvent('pi_amount_mismatch', 'critical', req.authUser!.id, req.ip || '', `Expected ${order.total_pi} PI, Pi API reported ${paymentData.amount}`);
       return res.status(400).json({ error: 'Payment amount mismatch detected during server verification.' });
     }
-
-    const approveRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}/approve`, {
-      method: 'POST',
-      headers: { Authorization: `Key ${piKey}` },
-    });
-
-    if (!approveRes.ok) {
-      const txt = await approveRes.text();
-      return res.status(502).json({ error: `Pi Server Approval failed: ${txt}` });
+    if (paymentData.status?.cancelled || paymentData.status?.user_cancelled) {
+      return res.status(409).json({ error: 'Pi payment was cancelled.' });
     }
 
-    const approvedJson = await approveRes.json();
+    const approvedJson = paymentData.status?.developer_approved
+      ? paymentData
+      : await (async () => {
+          const approveRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}/approve`, {
+            method: 'POST',
+            headers: { Authorization: `Key ${piKey}` },
+          });
+          if (!approveRes.ok) {
+            const txt = await approveRes.text();
+            throw new Error(`Pi Server Approval failed: ${txt}`);
+          }
+          return approveRes.json();
+        })();
     db.prepare(`
       UPDATE payments
       SET pi_payment_id = ?, status = 'approved', verification_payload_json = ?, updated_at = datetime('now')
@@ -352,17 +374,9 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'paymentId and txid are required for server completion.' });
   }
 
-  // Prevent duplicate txid replay across orders
-  const existingTx = db.prepare(`SELECT id, order_id FROM payments WHERE txid = ?`).get(txid) as
-    | { id: number; order_id: number }
-    | undefined;
-  if (existingTx) {
-    recordSecurityEvent('pi_duplicate_txid_replay', 'critical', req.authUser!.id, req.ip || '', `Duplicate txid replay blocked: ${txid}`);
-    return res.status(409).json({ error: 'Duplicate blockchain transaction ID (txid) detected and blocked.' });
-  }
-
   const paymentRow = db.prepare(`
-    SELECT p.id as pay_id, p.order_id, p.amount_pi, p.status as pay_status, o.buyer_user_id, o.order_type, o.reference_id, o.item_title
+    SELECT p.id as pay_id, p.order_id, p.amount_pi, p.status as pay_status, p.txid as existing_txid,
+           o.buyer_user_id, o.order_type, o.reference_id, o.item_title
     FROM payments p
     JOIN orders o ON o.id = p.order_id
     WHERE p.pi_payment_id = ? AND o.buyer_user_id = ?
@@ -372,6 +386,7 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
         order_id: number;
         amount_pi: number;
         pay_status: string;
+        existing_txid: string | null;
         buyer_user_id: number;
         order_type: string;
         reference_id: number;
@@ -383,37 +398,84 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
     return res.status(404).json({ error: 'Matching approved payment record not found.' });
   }
   if (paymentRow.pay_status === 'completed') {
-    return res.status(409).json({ error: 'Payment already verified and completed.' });
+    if (paymentRow.existing_txid === txid) {
+      return res.json({ completed: true, unlocked: true, alreadyCompleted: true, txid, orderId: paymentRow.order_id });
+    }
+    return res.status(409).json({ error: 'Payment already verified and completed with a different txid.' });
+  }
+
+  // Prevent duplicate txid replay across different orders
+  const existingTx = db.prepare(`SELECT id, order_id FROM payments WHERE txid = ? AND order_id != ?`).get(
+    txid,
+    paymentRow.order_id
+  ) as { id: number; order_id: number } | undefined;
+  if (existingTx) {
+    recordSecurityEvent('pi_duplicate_txid_replay', 'critical', req.authUser!.id, req.ip || '', `Duplicate txid replay blocked: ${txid}`);
+    return res.status(409).json({ error: 'Duplicate blockchain transaction ID (txid) detected and blocked.' });
   }
 
   const piKey = getPiApiKey();
   if (!piKey) {
     return res.status(503).json({
-      error: 'PI_API_KEY is not configured. Server-side completion requires official Pi Platform API credentials.',
+      error: 'PI_NETWORK_API_KEY is not configured. Server-side completion requires official Pi Platform API credentials.',
     });
   }
 
   try {
-    const completeRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}/complete`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Key ${piKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ txid }),
+    const inspectRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}`, {
+      headers: { Authorization: `Key ${piKey}` },
     });
-
-    if (!completeRes.ok) {
-      const txt = await completeRes.text();
-      return res.status(502).json({ error: `Pi Server Completion failed: ${txt}` });
+    if (!inspectRes.ok) {
+      return res.status(502).json({ error: `Pi Platform API payment lookup failed (${inspectRes.status}).` });
     }
-
-    const completedPayload = (await completeRes.json()) as {
+    const inspectedPayload = (await inspectRes.json()) as {
       amount?: number;
+      direction?: string;
+      user_uid?: string;
       status?: { developer_completed?: boolean; transaction_verified?: boolean };
+      transaction?: { txid?: string; verified?: boolean } | null;
     };
 
-    if (!completedPayload?.status?.developer_completed || !completedPayload?.status?.transaction_verified) {
+    if (inspectedPayload.direction && inspectedPayload.direction !== 'user_to_app') {
+      return res.status(400).json({ error: `Invalid payment direction (${inspectedPayload.direction}).` });
+    }
+    if (req.authUser?.pi_uid && inspectedPayload.user_uid && inspectedPayload.user_uid !== req.authUser.pi_uid) {
+      return res.status(403).json({ error: 'Payment payer identity mismatch.' });
+    }
+    if (typeof inspectedPayload.amount !== 'number' || Math.abs(inspectedPayload.amount - paymentRow.amount_pi) > 0.0001) {
+      return res.status(400).json({ error: 'Payment amount mismatch detected during completion verification.' });
+    }
+    if (inspectedPayload.transaction?.txid && inspectedPayload.transaction.txid !== txid) {
+      return res.status(409).json({ error: 'Submitted txid does not match Pi Platform record.' });
+    }
+
+    const alreadyDoneOnPi = Boolean(
+      inspectedPayload.status?.developer_completed &&
+        (inspectedPayload.status?.transaction_verified || inspectedPayload.transaction?.verified)
+    );
+
+    const completedPayload = alreadyDoneOnPi
+      ? inspectedPayload
+      : await (async () => {
+          const completeRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}/complete`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Key ${piKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ txid }),
+          });
+          if (!completeRes.ok) {
+            const txt = await completeRes.text();
+            throw new Error(`Pi Server Completion failed: ${txt}`);
+          }
+          return completeRes.json();
+        })();
+
+    const txVerified = Boolean(
+      completedPayload?.status?.transaction_verified || completedPayload?.transaction?.verified
+    );
+    if (!completedPayload?.status?.developer_completed || !txVerified) {
       recordSecurityEvent('pi_unverified_completion', 'critical', req.authUser!.id, req.ip || '', `Unverified completion payload for ${paymentId}`);
       return res.status(400).json({ error: 'Pi blockchain transaction could not be verified on server.' });
     }
@@ -578,9 +640,19 @@ router.post('/orders/:orderId/fulfill', requireAuth, (req, res) => {
   return res.json({ fulfilled: true });
 });
 
-router.post('/pi/cancel', requireAuth, (req, res) => {
+router.post('/pi/cancel', requireAuth, async (req, res) => {
   const orderId = Number(req.body?.orderId);
+  const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId.trim() : '';
+  const attemptServerCancel = Boolean(req.body?.attemptServerCancel);
   if (!orderId) return res.status(400).json({ error: 'orderId required' });
+
+  const piKey = getPiApiKey();
+  if (attemptServerCancel && paymentId && piKey) {
+    await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}/cancel`, {
+      method: 'POST',
+      headers: { Authorization: `Key ${piKey}` },
+    }).catch(() => undefined);
+  }
 
   db.transaction(() => {
     db.prepare(`UPDATE orders SET status = 'cancelled', fulfillment_status = 'cancelled_locked' WHERE id = ? AND buyer_user_id = ? AND status = 'awaiting_payment'`).run(

@@ -13,6 +13,7 @@ export interface PiIncompletePayment {
   identifier?: string;
   user_uid?: string;
   amount?: number;
+  metadata?: { orderId?: number | string; type?: string; app?: string; [key: string]: unknown } | null;
   status?: {
     developer_approved?: boolean;
     transaction_verified?: boolean;
@@ -175,15 +176,21 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
   const paymentId = incomplete?.identifier;
   if (!paymentId) return;
 
+  const orderId = incomplete.metadata?.orderId ? Number(incomplete.metadata.orderId) : null;
+  const completeEndpoint = orderId ? '/api/payments/pi/complete' : '/api/pi/complete';
+  const approveEndpoint = orderId ? '/api/payments/pi/approve' : '/api/pi/approve';
+  const cancelEndpoint = orderId ? '/api/payments/pi/cancel' : '/api/pi/cancel';
+
   try {
     if (incomplete.transaction?.txid) {
-      await fetch('/api/pi/complete', {
+      await fetch(completeEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           paymentId,
           txid: incomplete.transaction.txid,
+          ...(orderId ? { orderId } : {}),
         }),
       });
       return;
@@ -195,28 +202,39 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
       !incomplete.status.cancelled &&
       !incomplete.status.user_cancelled
     ) {
-      const appRes = await fetch('/api/pi/approve', {
+      const appRes = await fetch(approveEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ paymentId }),
+        body: JSON.stringify({
+          paymentId,
+          ...(orderId ? { orderId } : {}),
+        }),
       });
       if (!appRes.ok) {
-        await fetch('/api/pi/cancel', {
+        await fetch(cancelEndpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ paymentId, attemptServerCancel: true }),
+          body: JSON.stringify({
+            paymentId,
+            attemptServerCancel: true,
+            ...(orderId ? { orderId } : {}),
+          }),
         });
       }
       return;
     }
 
-    await fetch('/api/pi/cancel', {
+    await fetch(cancelEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ paymentId, attemptServerCancel: true }),
+      body: JSON.stringify({
+        paymentId,
+        attemptServerCancel: true,
+        ...(orderId ? { orderId } : {}),
+      }),
     });
   } catch {
     // Keep authentication resilient even if stale incomplete payment cleanup fails
@@ -494,7 +512,7 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
         {
           amount: 0.01,
           memo: 'IFIOK-EN Testnet Test',
-          metadata: { app: 'ifiok-en', type: 'testnet_test' },
+          metadata: { app: 'ifiok-en', type: 'testnet_test', direction: 'user_to_app' },
         },
         {
           onReadyForServerApproval: async (paymentId: string) => {
@@ -622,7 +640,7 @@ export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise
     }).catch(() => undefined);
 
     throw new Error(
-      `Order #${intent.orderId} requires Official Pi Browser Testnet settlement (${intent.amountPi} π). Open IFIOK-EN inside Pi Browser with server PI_API_KEY configured to complete payment.`
+      `Order #${intent.orderId} requires Official Pi Browser Testnet settlement (${intent.amountPi} π). Open IFIOK-EN inside Pi Browser with server PI_NETWORK_API_KEY configured to complete payment.`
     );
   }
 
@@ -635,7 +653,12 @@ export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise
       {
         amount: intent.amountPi!,
         memo: intent.memo || `IFIOK-EN Order #${intent.orderId}`,
-        metadata: { orderId: intent.orderId, environment: 'testnet' },
+        metadata: {
+          app: 'ifiok-en',
+          orderId: intent.orderId,
+          direction: 'user_to_app',
+          environment: 'testnet',
+        },
       },
       {
         onReadyForServerApproval: async (paymentId: string) => {

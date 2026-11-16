@@ -156,6 +156,16 @@ export function PiTestnetPaymentButton({ compact = false, onPaymentSuccess }: Pi
               <span className="text-slate-500 dark:text-slate-400">Transaction ID: </span>
               <span className="font-semibold">{state.receipt.txid}</span>
             </div>
+            <div className="sm:col-span-2 pt-1">
+              <a
+                href="https://blockexplorer.minepi.com/testnet/accounts/GDD4KZEBDEJMYJYP6O5SCBHE5GGIF6K3RTHCF4ZGIWWIPGAHLTTXZB2O"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-semibold text-emerald-800 dark:text-emerald-300"
+              >
+                Verify U2A Credit on Pi Testnet Blockexplorer
+              </a>
+            </div>
           </div>
         </div>
       )}

@@ -24,6 +24,7 @@ interface PiPlatformPayment {
   identifier?: string;
   user_uid?: string;
   amount?: number;
+  direction?: string;
   memo?: string;
   metadata?: { type?: string; app?: string; [key: string]: unknown } | null;
   to_address?: string;
@@ -43,7 +44,7 @@ interface PiPlatformPayment {
 }
 
 function getPiApiKey(): string | null {
-  const key = process.env.PI_API_KEY?.trim();
+  const key = process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim();
   return key && key.length > 10 ? key : null;
 }
 
@@ -59,10 +60,27 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
 
 function validateTestnetPaymentForApp(
   piPayment: PiPlatformPayment,
-  expectedPaymentId: string
+  expectedPaymentId: string,
+  expectedPiUid?: string
 ): { valid: true } | { valid: false; statusCode: number; error: string } {
   if (piPayment.identifier && piPayment.identifier !== expectedPaymentId) {
     return { valid: false, statusCode: 400, error: 'Payment identifier mismatch.' };
+  }
+
+  if (piPayment.direction && piPayment.direction !== 'user_to_app') {
+    return {
+      valid: false,
+      statusCode: 400,
+      error: `Invalid payment direction (${piPayment.direction}). Expected user_to_app.`,
+    };
+  }
+
+  if (expectedPiUid && piPayment.user_uid && piPayment.user_uid !== expectedPiUid) {
+    return {
+      valid: false,
+      statusCode: 403,
+      error: 'Payment payer identity does not match authenticated Pi user.',
+    };
   }
 
   // Strictly block Mainnet payments on Testnet endpoint
@@ -104,6 +122,7 @@ router.get('/status', (_req, res) => {
     environment: 'testnet',
     sandbox: true,
     sdkVersion: '2.0',
+    direction: 'user_to_app',
     testAmountPi: TESTNET_AMOUNT_PI,
     testnetWallet: TESTNET_APP_WALLET,
     piServerKeyConfigured: Boolean(getPiApiKey()),
@@ -240,12 +259,50 @@ router.post('/approve', optionalAuth, async (req, res) => {
     return res.status(503).json({
       success: false,
       ok: false,
-      error: 'PI_API_KEY is not configured on the server. Add your Pi Developer Portal Testnet Server API Key to PI_API_KEY.',
+      error: 'PI_NETWORK_API_KEY is not configured on the server. Add your Pi Developer Portal Testnet Server API Key to PI_NETWORK_API_KEY.',
     });
   }
 
   const startedAt = Date.now();
   try {
+    // 1. Inspect payment on Pi Platform API first to confirm direction, amount, user, and metadata
+    const inspectRes = await fetchWithTimeout(
+      `${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}`,
+      { headers: { Authorization: `Key ${piKey}` } },
+      4500
+    );
+    if (!inspectRes.ok) {
+      const errText = await inspectRes.text();
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: `Pi Platform API rejected payment lookup (${inspectRes.status}): ${errText || 'Not found'}`,
+      });
+    }
+    const inspectedJson = (await inspectRes.json()) as PiPlatformPayment;
+    const preValidation = validateTestnetPaymentForApp(inspectedJson, paymentId, verifiedPiUid || undefined);
+    if (!preValidation.valid) {
+      return res.status(preValidation.statusCode).json({ success: false, ok: false, error: preValidation.error });
+    }
+    if (inspectedJson.status?.cancelled || inspectedJson.status?.user_cancelled) {
+      return res.status(409).json({ success: false, ok: false, error: 'Payment was already cancelled.' });
+    }
+    if (inspectedJson.status?.developer_approved) {
+      return res.json({
+        success: true,
+        ok: true,
+        approved: true,
+        alreadyApproved: true,
+        paymentId,
+        amount: TESTNET_AMOUNT_PI,
+        username: verifiedUsername,
+        status: 'approved',
+        environment: 'testnet',
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
+
+    // 2. Approve payment
     const approveRes = await fetchWithTimeout(
       `${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/approve`,
       {
@@ -293,7 +350,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
       });
     }
 
-    const validation = validateTestnetPaymentForApp(approvedJson, paymentId);
+    const validation = validateTestnetPaymentForApp(approvedJson, paymentId, verifiedPiUid || undefined);
     if (!validation.valid) {
       recordSecurityEvent(
         'pi_testnet_approval_validation_failed',
@@ -377,6 +434,25 @@ router.post('/complete', optionalAuth, async (req, res) => {
     });
   }
 
+  // Idempotent return if this exact paymentId + txid already completed
+  const existingCompleted = db.prepare(`
+    SELECT payment_id, txid, username, amount_pi FROM pi_testnet_payments WHERE payment_id = ? AND txid = ? AND status = 'completed'
+  `).get(paymentId, txid) as { payment_id: string; txid: string; username: string; amount_pi: number } | undefined;
+  if (existingCompleted) {
+    return res.json({
+      success: true,
+      ok: true,
+      completed: true,
+      alreadyCompleted: true,
+      paymentId: existingCompleted.payment_id,
+      txid: existingCompleted.txid,
+      amount: existingCompleted.amount_pi,
+      username: existingCompleted.username || verifiedUsername,
+      status: 'completed',
+      environment: 'testnet',
+    });
+  }
+
   // Block replay of a txid already used by another paymentId
   const duplicateTx = db.prepare(`
     SELECT payment_id FROM pi_testnet_payments WHERE txid = ? AND payment_id != ? AND status = 'completed'
@@ -401,7 +477,7 @@ router.post('/complete', optionalAuth, async (req, res) => {
     return res.status(503).json({
       success: false,
       ok: false,
-      error: 'PI_API_KEY is not configured on the server. Add your Pi Developer Portal Testnet Server API Key to PI_API_KEY.',
+      error: 'PI_NETWORK_API_KEY is not configured on the server. Add your Pi Developer Portal Testnet Server API Key to PI_NETWORK_API_KEY.',
     });
   }
 
@@ -431,26 +507,32 @@ router.post('/complete', optionalAuth, async (req, res) => {
         error: `Invalid Testnet test amount. Expected ${TESTNET_AMOUNT_PI} Pi, received ${piPayment.amount ?? 'unknown'}.`,
       });
     }
-    const validation = validateTestnetPaymentForApp(piPayment, paymentId);
+    const validation = validateTestnetPaymentForApp(piPayment, paymentId, verifiedPiUid || undefined);
     if (!validation.valid) {
       return res.status(validation.statusCode).json({ success: false, ok: false, error: validation.error });
     }
+    if (piPayment.transaction?.txid && piPayment.transaction.txid !== txid) {
+      return res.status(409).json({ success: false, ok: false, error: 'Submitted txid does not match Pi Platform record.' });
+    }
 
-    // 2. Call Pi Platform API /complete with txid
-    const completeRes = await fetchWithTimeout(
-      `${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/complete`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Key ${piKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ txid }),
-      },
-      6000
-    );
+    // 2. Call Pi Platform API /complete with txid (or accept already verified completion)
+    const completeRes =
+      piPayment.status?.developer_completed && (piPayment.status?.transaction_verified || piPayment.transaction?.verified)
+        ? null
+        : await fetchWithTimeout(
+            `${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/complete`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Key ${piKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ txid }),
+            },
+            6000
+          );
 
-    if (!completeRes.ok) {
+    if (completeRes && !completeRes.ok) {
       const errText = await completeRes.text();
       db.prepare(`
         INSERT INTO pi_testnet_payments (payment_id, txid, username, pi_uid, user_id, amount_pi, status, error_message)
@@ -477,7 +559,9 @@ router.post('/complete', optionalAuth, async (req, res) => {
       });
     }
 
-    const completedJson = (await completeRes.json()) as PiPlatformPayment;
+    const completedJson = completeRes
+      ? ((await completeRes.json()) as PiPlatformPayment)
+      : piPayment;
     const txVerified = Boolean(completedJson?.status?.transaction_verified || completedJson?.transaction?.verified);
     const devCompleted = Boolean(completedJson?.status?.developer_completed);
 

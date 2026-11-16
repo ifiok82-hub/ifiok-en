@@ -8,7 +8,12 @@ import { MemberDashboard } from './components/MemberDashboard.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { apiRequest } from './lib/api.ts';
 import { detectInitialLanguage, isRtlLanguage, LANGUAGE_OPTIONS } from './lib/i18n.ts';
-import { initAppStudioBridge, isAppStudioEnvironment } from './lib/appStudio.ts';
+import {
+  initAppStudioBridge,
+  isAppStudioEnvironment,
+  sendTokenToAppStudioNow,
+  startAppStudioHeartbeat,
+} from './lib/appStudio.ts';
 import {
   connectWithPi,
   getStoredPiAuth,
@@ -175,12 +180,17 @@ export default function App() {
 
   useEffect(() => {
     const cleanupBridge = initAppStudioBridge();
+    startAppStudioHeartbeat();
+    const t500 = window.setTimeout(sendTokenToAppStudioNow, 500);
+    const t2000 = window.setTimeout(sendTokenToAppStudioNow, 2000);
     void waitForPiSdk(6000);
     void revalidateStoredPiAuth().then((valid) => setPiAuth(valid));
     const syncPi = () => setPiAuth(getStoredPiAuth());
     window.addEventListener(PI_AUTH_EVENT, syncPi);
     window.addEventListener('storage', syncPi);
     return () => {
+      window.clearTimeout(t500);
+      window.clearTimeout(t2000);
       cleanupBridge();
       window.removeEventListener(PI_AUTH_EVENT, syncPi);
       window.removeEventListener('storage', syncPi);

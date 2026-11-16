@@ -43,8 +43,8 @@ app.use(
             styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
             fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
             imgSrc: ["'self'", 'data:', 'https:'],
-            connectSrc: ["'self'", 'https://socialchain.app', 'https://*.minepi.com', 'https://*.pinet.com'],
-            frameSrc: ["'self'", 'https://socialchain.app', 'https://*.minepi.com', 'https://*.pinet.com'],
+            connectSrc: ["'self'", 'https://socialchain.app', 'https://*.minepi.com', 'https://*.pinet.com', 'https://*.piappengine.com'],
+            frameSrc: ["'self'", 'https://socialchain.app', 'https://*.minepi.com', 'https://*.pinet.com', 'https://*.piappengine.com'],
             frameAncestors: null,
           },
         }

@@ -44,7 +44,7 @@ export default async function handler(req: Req, res: Res) {
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), 9000);
   try {
     // Exchange accessToken with App Studio; ignore any browser-supplied uid/username
     const appStudioRes = await fetch(APP_STUDIO_LOGIN_URL, {

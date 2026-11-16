@@ -5,6 +5,8 @@ import {
   getAppStudioSession,
   isAppStudioEnvironment,
   sendTokenToAppStudio,
+  sendTokenToAppStudioNow,
+  startAppStudioHeartbeat,
 } from './appStudio.ts';
 
 export interface PiIncompletePayment {
@@ -232,9 +234,14 @@ export async function connectWithPi(
     if (browserUser) {
       window.localStorage.setItem('pi_user', JSON.stringify(browserUser));
     }
+    window.__PI_ACCESS_TOKEN = accessToken;
+    window.__PI_USER = browserUser;
+    window.piAccessToken = accessToken;
   }
 
-  // Send token 6 times (0-5s + 500ms) across parent/top immediately after Pi.authenticate() succeeds
+  // Start continuous App Studio heartbeat & send immediate + 1s..10s retries
+  startAppStudioHeartbeat();
+  sendTokenToAppStudioNow();
   broadcastTokenToAppStudio(accessToken, browserUser);
 
   // Exchange accessToken server-side via App Studio (/pi/auth/v1/login) & log appStudioSession

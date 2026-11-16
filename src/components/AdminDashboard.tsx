@@ -14,9 +14,17 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { apiRequest } from '../lib/api.ts';
-import type { AiProviderStatus, AppView, UserProfile } from '../types/platform.ts';
+import {
+  ACADEMIC_SUBJECTS,
+  BUSINESS_HUB_CATEGORIES,
+  DELIVERY_METHODS,
+  LANGUAGE_OPTIONS,
+  MARKET_SUITES,
+  OPPORTUNITY_TYPES,
+} from '../lib/i18n.ts';
+import type { AiProviderStatus, AppView, SupplierIntegration, UserProfile } from '../types/platform.ts';
 import { BrandLogo } from './BrandLogo.tsx';
 
 type AdminTab =
@@ -77,6 +85,9 @@ interface AdminOverviewData {
   schools?: Array<Record<string, unknown>>;
   communityPosts: Array<Record<string, unknown>>;
   transactions: Array<Record<string, unknown>>;
+  piTestnetPayments: Array<Record<string, unknown>>;
+  entitlements: Array<Record<string, unknown>>;
+  supplierIntegrations: SupplierIntegration[];
   subscriptions: Array<Record<string, unknown>>;
   disputes: Array<Record<string, unknown>>;
   auditLogs: Array<Record<string, unknown>>;
@@ -95,7 +106,13 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
   // Verified Publisher form state
   const [pubType, setPubType] = useState<'product' | 'course' | 'business' | 'opportunity'>('product');
   const [pubTitle, setPubTitle] = useState('');
-  const [pubCategory, setPubCategory] = useState('Electronics & Tech');
+  const [pubCategory, setPubCategory] = useState('Licensed Software');
+  const [pubMarketSuite, setPubMarketSuite] = useState('software_productivity');
+  const [pubDeliveryMethod, setPubDeliveryMethod] = useState('instant_digital_download');
+  const [pubDistPermission, setPubDistPermission] = useState('');
+  const [pubRefundTerms, setPubRefundTerms] = useState('');
+  const [pubHubCategory, setPubHubCategory] = useState('Verified SMEs');
+  const [pubEligibility, setPubEligibility] = useState('');
   const [pubSubType, setPubSubType] = useState('digital');
   const [pubPricePi, setPubPricePi] = useState('5');
   const [pubStock, setPubStock] = useState('10');
@@ -107,6 +124,29 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
   const [pubExtraOrg, setPubExtraOrg] = useState('');
   const [pubDeadline, setPubDeadline] = useState('2026-12-31');
   const [uploadingPubImg, setUploadingPubImg] = useState(false);
+
+  // Course 15-point Verified Publisher fields
+  const [pubLanguageCode, setPubLanguageCode] = useState('en');
+  const [pubObjectivesText, setPubObjectivesText] = useState('');
+  const [pubModulesText, setPubModulesText] = useState('');
+  const [pubSlidesText, setPubSlidesText] = useState('');
+  const [pubAssignmentsText, setPubAssignmentsText] = useState('');
+  const [pubQuizzesText, setPubQuizzesText] = useState('');
+  const [pubExamGuide, setPubExamGuide] = useState('');
+  const [pubMediaUrl, setPubMediaUrl] = useState('');
+  const [pubInstructorQual, setPubInstructorQual] = useState('');
+  const [pubPrerequisites, setPubPrerequisites] = useState('');
+  const [pubCopyright, setPubCopyright] = useState('');
+  const [pubCertificateCriteria, setPubCertificateCriteria] = useState('');
+
+  // Authorized Supplier Integrations state
+  const [supName, setSupName] = useState('');
+  const [supSuite, setSupSuite] = useState('software_productivity');
+  const [supType, setSupType] = useState<'authorized_api' | 'json_feed' | 'partner_portal'>('json_feed');
+  const [supFeedUrl, setSupFeedUrl] = useState('');
+  const [supLicense, setSupLicense] = useState('');
+  const [supAuthHeader, setSupAuthHeader] = useState('');
+  const [syncingSupId, setSyncingSupId] = useState<number | null>(null);
 
   // AI Governance & Monitoring state
   const [aiMonitor, setAiMonitor] = useState<{
@@ -206,26 +246,50 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
       Object.assign(payload, {
         title: pubTitle,
         category: pubCategory,
+        marketSuite: pubMarketSuite,
         productType: pubSubType,
         pricePi: Number(pubPricePi),
         stockQty: Number(pubStock) || 1,
+        deliveryMethod: pubDeliveryMethod,
+        distributionPermission: pubDistPermission,
+        refundSupportTerms: pubRefundTerms,
         description: pubDescription,
         lockedContent: pubLockedPayload,
       });
     } else if (pubType === 'course') {
+      const moduleLines = pubModulesText.split('\n').map((s) => s.trim()).filter(Boolean);
+      const parsedModules = moduleLines.map((line) => {
+        const [topic, ...rest] = line.split('|');
+        return { topic: (topic || line).trim(), notes: rest.join('|').trim() || (topic || line).trim() };
+      });
       Object.assign(payload, {
         title: pubTitle,
         category: pubCategory,
+        subject: pubCategory,
+        languageCode: pubLanguageCode,
         level: pubSubType || 'Intermediate',
         durationHours: Number(pubStock) || 8,
         pricePi: Number(pubPricePi) || 0,
         description: pubDescription,
+        syllabus: parsedModules.map((m) => m.topic),
+        learningObjectives: pubObjectivesText.split('\n').map((s) => s.trim()).filter(Boolean),
+        modulesNotes: parsedModules,
+        slidesResources: pubSlidesText.split('\n').map((s) => s.trim()).filter(Boolean),
+        assignments: pubAssignmentsText.split('\n').map((s) => s.trim()).filter(Boolean),
+        quizzes: pubQuizzesText.split('\n').map((s) => s.trim()).filter(Boolean),
+        examMarkingGuide: pubExamGuide,
+        mediaLessonUrl: pubMediaUrl,
+        instructorQualifications: pubInstructorQual,
+        prerequisites: pubPrerequisites,
+        copyrightPermission: pubCopyright,
+        certificateCriteria: pubCertificateCriteria,
         lockedMaterials: pubLockedPayload,
       });
     } else if (pubType === 'business') {
       Object.assign(payload, {
         businessName: pubTitle,
         sector: pubCategory,
+        hubCategory: pubHubCategory,
         country: pubExtraOrg || 'Global',
         website: pubSourceUrl,
         summary: pubDescription,
@@ -238,15 +302,71 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
         organizationName: pubExtraOrg,
         location: pubCategory || 'Global / Remote',
         deadline: pubDeadline,
+        eligibility: pubEligibility,
         description: pubDescription,
       });
     }
 
-    await mutate('/api/admin/import-verified', 'POST', payload, `Verified ${pubType} published with provenance timestamp.`);
-    setPubTitle('');
-    setPubDescription('');
-    setPubLockedPayload('');
-    setPubImageUrl('');
+    try {
+      await apiRequest('/api/admin/import-verified', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setNotice({ type: 'ok', text: `Verified ${pubType} published with provenance timestamp.` });
+      await loadAdmin();
+      onRefreshSummary();
+      setPubTitle('');
+      setPubDescription('');
+      setPubLockedPayload('');
+      setPubImageUrl('');
+      setPubDistPermission('');
+      setPubRefundTerms('');
+      setPubEligibility('');
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Verified import rejected.' });
+    }
+  };
+
+  const handleAddSupplierIntegration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await apiRequest('/api/admin/supplier-integrations', {
+        method: 'POST',
+        body: JSON.stringify({
+          supplierName: supName,
+          categorySuite: supSuite,
+          integrationType: supType,
+          feedUrl: supFeedUrl,
+          distributionLicense: supLicense,
+          authHeaderName: supAuthHeader,
+        }),
+      });
+      setNotice({ type: 'ok', text: 'Authorized supplier integration registered.' });
+      setSupName('');
+      setSupFeedUrl('');
+      setSupLicense('');
+      setSupAuthHeader('');
+      await loadAdmin();
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Could not register supplier.' });
+    }
+  };
+
+  const handleSyncSupplier = async (id: number) => {
+    setSyncingSupId(id);
+    try {
+      const res = await apiRequest<{ imported: number; message?: string }>(`/api/admin/supplier-integrations/${id}/sync`, {
+        method: 'POST',
+      });
+      setNotice({ type: 'ok', text: res.message || `Synced ${res.imported} verified items from supplier feed.` });
+      await loadAdmin();
+      onRefreshSummary();
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Supplier feed sync failed.' });
+      await loadAdmin();
+    } finally {
+      setSyncingSupId(null);
+    }
   };
 
   const handleSaveSettings = async (e: React.FormEvent) => {
@@ -466,13 +586,16 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   title="SME Business Verification Queue"
                   icon={Building2}
                   items={data.businesses}
-                  renderTitle={(b) => `${String(b.business_name)} (${String(b.sector)} · ${String(b.country)})`}
-                  renderStatus={(b) => String(b.verification_status)}
-                  onApprove={(id) =>
-                    mutate(`/api/admin/businesses/${id}`, 'PATCH', { verificationStatus: 'verified', isFeatured: true })
+                  renderTitle={(b) =>
+                    `${String(b.business_name)} (${String(b.hub_category || b.sector)} · ${String(b.country)})`
                   }
-                  onReject={(id) =>
-                    mutate(`/api/admin/businesses/${id}`, 'PATCH', { verificationStatus: 'rejected', isFeatured: false })
+                  renderStatus={(b) => String(b.verification_status)}
+                  onModerate={(id, action, reviewNotes) =>
+                    mutate(`/api/admin/businesses/${id}`, 'PATCH', {
+                      moderationAction: action,
+                      isFeatured: action === 'approve',
+                      reviewNotes,
+                    })
                   }
                 />
 
@@ -483,21 +606,43 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   items={data.instructors}
                   renderTitle={(i) => `${String(i.full_name)} — ${String(i.headline)}`}
                   renderStatus={(i) => String(i.approval_status)}
-                  onApprove={(id) => mutate(`/api/admin/instructors/${id}`, 'PATCH', { approvalStatus: 'approved' })}
-                  onReject={(id) => mutate(`/api/admin/instructors/${id}`, 'PATCH', { approvalStatus: 'rejected' })}
+                  onModerate={(id, action, reviewNotes) =>
+                    mutate(`/api/admin/instructors/${id}`, 'PATCH', { moderationAction: action, reviewNotes })
+                  }
                 />
 
                 <ApprovalSection
-                  title="IFIOK SCHOOL Courses Queue"
+                  title="IFIOK SCHOOL Courses Queue (15-Point Paid Curriculum Gate)"
                   icon={BookOpen}
                   items={data.courses}
                   renderTitle={(c) => `${String(c.title)} — ${String(c.price_pi)} π (${String(c.instructor_name)})`}
                   renderStatus={(c) => String(c.approval_status)}
-                  onApprove={(id) =>
-                    mutate(`/api/admin/courses/${id}`, 'PATCH', { approvalStatus: 'approved', isFeatured: true })
-                  }
-                  onReject={(id) =>
-                    mutate(`/api/admin/courses/${id}`, 'PATCH', { approvalStatus: 'rejected', isFeatured: false })
+                  canApprove={(c) => !(Number(c.price_pi) > 0 && c.completeness_complete === false)}
+                  renderExtra={(c) => {
+                    const score = Number(c.completeness_score ?? 0);
+                    const total = Number(c.completeness_total ?? 15);
+                    const missing = Array.isArray(c.completeness_missing) ? (c.completeness_missing as string[]) : [];
+                    const blocked = Number(c.price_pi) > 0 && c.completeness_complete === false;
+                    return (
+                      <div className="mt-1 space-y-1">
+                        <div className={`font-mono text-[11px] ${blocked ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-emerald-700 dark:text-emerald-400'}`}>
+                          Curriculum Completeness: {score}/{total} {blocked ? '(Approval Blocked until 15/15)' : '(Complete)'}
+                        </div>
+                        {missing.length > 0 && (
+                          <div className="text-[11px] text-slate-500">
+                            Missing: {missing.slice(0, 4).join('; ')}
+                            {missing.length > 4 ? ` (+${missing.length - 4} more)` : ''}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }}
+                  onModerate={(id, action, reviewNotes) =>
+                    mutate(`/api/admin/courses/${id}`, 'PATCH', {
+                      moderationAction: action,
+                      isFeatured: action === 'approve',
+                      reviewNotes,
+                    })
                   }
                 />
 
@@ -508,29 +653,67 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   items={data.sellers}
                   renderTitle={(s) => `${String(s.store_name)} — ${String(s.full_name)} (${String(s.country)})`}
                   renderStatus={(s) => String(s.verification_status)}
-                  onApprove={(id) => mutate(`/api/admin/sellers/${id}`, 'PATCH', { verificationStatus: 'verified' })}
-                  onReject={(id) => mutate(`/api/admin/sellers/${id}`, 'PATCH', { verificationStatus: 'suspended' })}
+                  onModerate={(id, action, reviewNotes) =>
+                    mutate(`/api/admin/sellers/${id}`, 'PATCH', { moderationAction: action, reviewNotes })
+                  }
                 />
 
                 <ApprovalSection
                   title="Market Product Listings Queue"
                   icon={ShoppingBag}
                   items={data.products}
-                  renderTitle={(p) => `${String(p.title)} — ${String(p.price_pi)} π (${String(p.store_name)})`}
+                  renderTitle={(p) =>
+                    `${String(p.title)} — ${String(p.price_pi)} π (${String(p.store_name)} · Suite: ${String(p.market_suite || p.category)})`
+                  }
                   renderStatus={(p) => String(p.approval_status)}
-                  onApprove={(id) => mutate(`/api/admin/products/${id}`, 'PATCH', { approvalStatus: 'approved' })}
-                  onReject={(id) => mutate(`/api/admin/products/${id}`, 'PATCH', { approvalStatus: 'rejected' })}
+                  renderExtra={(p) => {
+                    const id = Number(p.id);
+                    const avail = String(p.availability_status || 'available');
+                    return (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+                        <span className="font-mono text-slate-500">
+                          Stock: {String(p.stock_qty)} · Fulfillment: {String(p.delivery_method || 'digital')} · Status:{' '}
+                          <strong className="uppercase">{avail}</strong>
+                        </span>
+                        {(['available', 'limited', 'out_of_stock'] as const).map((st) => (
+                          <button
+                            key={st}
+                            type="button"
+                            onClick={() =>
+                              mutate(
+                                `/api/admin/products/${id}/availability`,
+                                'PATCH',
+                                { availabilityStatus: st },
+                                `Inventory status updated to ${st}.`
+                              )
+                            }
+                            className={`px-2 py-0.5 rounded border font-mono cursor-pointer ${
+                              avail === st
+                                ? 'border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-semibold'
+                                : 'border-slate-300 dark:border-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                          >
+                            {st}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  }}
+                  onModerate={(id, action, reviewNotes) =>
+                    mutate(`/api/admin/products/${id}`, 'PATCH', { moderationAction: action, reviewNotes })
+                  }
                 />
 
                 {/* Opportunities & Freelance Services */}
                 <ApprovalSection
-                  title="Jobs, Grants & Scholarships Queue"
+                  title="Jobs, Grants, Fellowships & Competitions Queue"
                   icon={Users}
                   items={data.opportunities}
                   renderTitle={(o) => `${String(o.title)} (${String(o.opportunity_type)} · ${String(o.organization_name)})`}
                   renderStatus={(o) => String(o.approval_status)}
-                  onApprove={(id) => mutate(`/api/admin/opportunities/${id}`, 'PATCH', { approvalStatus: 'approved' })}
-                  onReject={(id) => mutate(`/api/admin/opportunities/${id}`, 'PATCH', { approvalStatus: 'rejected' })}
+                  onModerate={(id, action, reviewNotes) =>
+                    mutate(`/api/admin/opportunities/${id}`, 'PATCH', { moderationAction: action, reviewNotes })
+                  }
                 />
 
                 <ApprovalSection
@@ -539,8 +722,9 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   items={data.schools || []}
                   renderTitle={(s) => `${String(s.name)} — ${String(s.school_type)} (${String(s.country)})`}
                   renderStatus={(s) => String(s.verification_status)}
-                  onApprove={(id) => mutate(`/api/admin/schools/${id}`, 'PATCH', { verificationStatus: 'verified' })}
-                  onReject={(id) => mutate(`/api/admin/schools/${id}`, 'PATCH', { verificationStatus: 'rejected' })}
+                  onModerate={(id, action, reviewNotes) =>
+                    mutate(`/api/admin/schools/${id}`, 'PATCH', { moderationAction: action, reviewNotes })
+                  }
                 />
 
                 <ApprovalSection
@@ -549,8 +733,9 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   items={data.services}
                   renderTitle={(s) => `${String(s.title)} — ${String(s.price_pi)} π (${String(s.freelancer_name)})`}
                   renderStatus={(s) => String(s.approval_status)}
-                  onApprove={(id) => mutate(`/api/admin/services/${id}`, 'PATCH', { approvalStatus: 'approved' })}
-                  onReject={(id) => mutate(`/api/admin/services/${id}`, 'PATCH', { approvalStatus: 'rejected' })}
+                  onModerate={(id, action, reviewNotes) =>
+                    mutate(`/api/admin/services/${id}`, 'PATCH', { moderationAction: action, reviewNotes })
+                  }
                 />
               </div>
             )}
@@ -725,265 +910,634 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
             )}
 
             {tab === 'publisher' && (
-              <form
-                onSubmit={handlePublishVerified}
-                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4 max-w-3xl"
-              >
-                <div>
-                  <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
-                    Verified Inventory & Authorized Feed Publisher
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    Publish only genuine owned inventory, authorized supplier feeds, confirmed institutional opportunities, or accredited curricula with recorded source provenance.
-                  </p>
-                </div>
+              <div className="space-y-8 max-w-4xl">
+                <form
+                  onSubmit={handlePublishVerified}
+                  className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4"
+                >
+                  <div>
+                    <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                      Verified Inventory & Authorized Feed Publisher
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      Publish only genuine owned inventory, authorized supplier feeds, confirmed institutional opportunities, or complete 15-point curricula with recorded provenance.
+                    </p>
+                  </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium mb-1">Catalog Type</label>
-                    <select
-                      value={pubType}
-                      onChange={(e) => {
-                        const next = e.target.value as typeof pubType;
-                        setPubType(next);
-                        if (next === 'product') {
-                          setPubCategory('Electronics & Tech');
-                          setPubSubType('digital');
-                        } else if (next === 'course') {
-                          setPubCategory('Web3 & Blockchain');
-                          setPubSubType('Intermediate');
-                        } else if (next === 'business') {
-                          setPubCategory('Technology & Consulting');
-                          setPubSubType('Enterprise Services');
-                        } else {
-                          setPubCategory('Global / Remote');
-                          setPubSubType('job');
-                        }
-                      }}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                    >
-                      <option value="product">IFIOK Market Product</option>
-                      <option value="course">IFIOK SCHOOL Course</option>
-                      <option value="business">Verified Business Hub SME</option>
-                      <option value="opportunity">Confirmed Opportunity / Grant</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium mb-1">Source Origin (Mandatory Provenance)</label>
-                    <input
-                      type="text"
-                      required
-                      minLength={3}
-                      value={pubSourceOrigin}
-                      onChange={(e) => setPubSourceOrigin(e.target.value)}
-                      placeholder="IFIOK-EN Inventory / Authorized Supplier"
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium mb-1">
-                      {pubType === 'business' ? 'Registered Business Name' : 'Listing Title'}
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      minLength={3}
-                      value={pubTitle}
-                      onChange={(e) => setPubTitle(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium mb-1">
-                      {pubType === 'business'
-                        ? 'Sector'
-                        : pubType === 'opportunity'
-                          ? 'Location'
-                          : 'Category'}
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={pubCategory}
-                      onChange={(e) => setPubCategory(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium mb-1">
-                      {pubType === 'product'
-                        ? 'Product Type'
-                        : pubType === 'course'
-                          ? 'Level'
-                          : pubType === 'opportunity'
-                            ? 'Opportunity Type'
-                            : 'Services Offered'}
-                    </label>
-                    {pubType === 'product' ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Catalog Type</label>
                       <select
-                        value={pubSubType}
-                        onChange={(e) => setPubSubType(e.target.value)}
+                        value={pubType}
+                        onChange={(e) => {
+                          const next = e.target.value as typeof pubType;
+                          setPubType(next);
+                          if (next === 'product') {
+                            setPubCategory('Licensed Software');
+                            setPubSubType('digital');
+                          } else if (next === 'course') {
+                            setPubCategory('Web3 and Blockchain');
+                            setPubSubType('Intermediate');
+                          } else if (next === 'business') {
+                            setPubCategory('Technology & Consulting');
+                            setPubSubType('Enterprise Services');
+                          } else {
+                            setPubCategory('Global / Remote');
+                            setPubSubType('job');
+                          }
+                        }}
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                       >
-                        <option value="digital">Digital Product</option>
-                        <option value="physical">Physical Product</option>
-                        <option value="service">Digital Service</option>
-                        <option value="web3">Web3 Product</option>
-                        <option value="pi_app">Verified Pi App</option>
-                        <option value="gaming_asset">Gaming Asset</option>
+                        <option value="product">IFIOK Market Product</option>
+                        <option value="course">IFIOK SCHOOL Course</option>
+                        <option value="business">Verified Business Hub SME</option>
+                        <option value="opportunity">Confirmed Opportunity / Grant / Fellowship</option>
                       </select>
-                    ) : pubType === 'opportunity' ? (
-                      <select
-                        value={pubSubType}
-                        onChange={(e) => setPubSubType(e.target.value)}
-                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                      >
-                        <option value="job">Job</option>
-                        <option value="internship">Internship</option>
-                        <option value="scholarship">Scholarship</option>
-                        <option value="grant">Grant</option>
-                        <option value="partnership">Partnership</option>
-                      </select>
-                    ) : (
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Source Origin (Mandatory Provenance)</label>
                       <input
                         type="text"
-                        value={pubSubType}
-                        onChange={(e) => setPubSubType(e.target.value)}
+                        required
+                        minLength={3}
+                        value={pubSourceOrigin}
+                        onChange={(e) => setPubSourceOrigin(e.target.value)}
+                        placeholder="IFIOK-EN Inventory / Authorized Supplier"
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                       />
-                    )}
+                    </div>
                   </div>
 
-                  {(pubType === 'product' || pubType === 'course') && (
-                    <>
-                      <div>
-                        <label className="block text-xs font-medium mb-1">Pi Price (π)</label>
-                        <input
-                          type="number"
-                          min={pubType === 'course' ? 0 : 0.1}
-                          step="0.1"
-                          value={pubPricePi}
-                          onChange={(e) => setPubPricePi(e.target.value)}
-                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium mb-1">
-                          {pubType === 'product' ? 'Verified Stock Qty' : 'Duration (Hours)'}
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={pubStock}
-                          onChange={(e) => setPubStock(e.target.value)}
-                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  {(pubType === 'business' || pubType === 'opportunity') && (
-                    <>
-                      <div>
-                        <label className="block text-xs font-medium mb-1">
-                          {pubType === 'business' ? 'Country' : 'Issuing Organization'}
-                        </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">
+                        {pubType === 'business' ? 'Registered Business Name' : 'Listing Title'}
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        minLength={3}
+                        value={pubTitle}
+                        onChange={(e) => setPubTitle(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">
+                        {pubType === 'business'
+                          ? 'Sector'
+                          : pubType === 'opportunity'
+                            ? 'Location'
+                            : pubType === 'course'
+                              ? 'Subject'
+                              : 'Category'}
+                      </label>
+                      {pubType === 'course' ? (
+                        <select
+                          value={pubCategory}
+                          onChange={(e) => setPubCategory(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                        >
+                          {ACADEMIC_SUBJECTS.map((subj) => (
+                            <option key={subj} value={subj}>
+                              {subj}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
                         <input
                           type="text"
                           required
-                          value={pubExtraOrg}
-                          onChange={(e) => setPubExtraOrg(e.target.value)}
+                          value={pubCategory}
+                          onChange={(e) => setPubCategory(e.target.value)}
                           className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                         />
-                      </div>
-                      {pubType === 'opportunity' && (
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">
+                        {pubType === 'product'
+                          ? 'Product Type'
+                          : pubType === 'course'
+                            ? 'Level'
+                            : pubType === 'opportunity'
+                              ? 'Opportunity Type'
+                              : 'Services Offered'}
+                      </label>
+                      {pubType === 'product' ? (
+                        <select
+                          value={pubSubType}
+                          onChange={(e) => setPubSubType(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                        >
+                          <option value="digital">Digital Product</option>
+                          <option value="physical">Physical Product</option>
+                          <option value="service">Digital Service</option>
+                          <option value="web3">Web3 Product</option>
+                          <option value="pi_app">Verified Pi App</option>
+                          <option value="gaming_asset">Gaming Asset</option>
+                        </select>
+                      ) : pubType === 'opportunity' ? (
+                        <select
+                          value={pubSubType}
+                          onChange={(e) => setPubSubType(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                        >
+                          {OPPORTUNITY_TYPES.map((ot) => (
+                            <option key={ot.id} value={ot.id}>
+                              {ot.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={pubSubType}
+                          onChange={(e) => setPubSubType(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                        />
+                      )}
+                    </div>
+
+                    {(pubType === 'product' || pubType === 'course') && (
+                      <>
                         <div>
-                          <label className="block text-xs font-medium mb-1">Deadline</label>
+                          <label className="block text-xs font-medium mb-1">Pi Price (π)</label>
                           <input
-                            type="date"
-                            required
-                            value={pubDeadline}
-                            onChange={(e) => setPubDeadline(e.target.value)}
+                            type="number"
+                            min={pubType === 'course' ? 0 : 0.1}
+                            step="0.1"
+                            value={pubPricePi}
+                            onChange={(e) => setPubPricePi(e.target.value)}
                             className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
                           />
                         </div>
-                      )}
-                    </>
-                  )}
-                </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">
+                            {pubType === 'product' ? 'Verified Stock Qty' : 'Duration (Hours)'}
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={pubStock}
+                            onChange={(e) => setPubStock(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                          />
+                        </div>
+                      </>
+                    )}
 
-                <div>
-                  <label className="block text-xs font-medium mb-1">Source Reference URL (Optional)</label>
-                  <input
-                    type="url"
-                    value={pubSourceUrl}
-                    onChange={(e) => setPubSourceUrl(e.target.value)}
-                    placeholder="https://..."
-                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                  />
-                </div>
+                    {(pubType === 'business' || pubType === 'opportunity') && (
+                      <>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">
+                            {pubType === 'business' ? 'Country' : 'Issuing Organization'}
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={pubExtraOrg}
+                            onChange={(e) => setPubExtraOrg(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                          />
+                        </div>
+                        {pubType === 'opportunity' ? (
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Deadline</label>
+                            <input
+                              type="date"
+                              required
+                              value={pubDeadline}
+                              onChange={(e) => setPubDeadline(e.target.value)}
+                              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                            />
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Business Hub Category</label>
+                            <select
+                              value={pubHubCategory}
+                              onChange={(e) => setPubHubCategory(e.target.value)}
+                              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                            >
+                              {BUSINESS_HUB_CATEGORIES.map((hc) => (
+                                <option key={hc} value={hc}>
+                                  {hc}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
 
-                {(pubType === 'product' || pubType === 'course') && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-xs font-medium mb-1">
-                        Verified Image Upload (PNG/JPEG/WEBP, scanned server-side)
-                      </label>
-                      <div className="flex flex-wrap items-center gap-3">
-                        <input
-                          type="file"
-                          accept="image/png,image/jpeg,image/webp"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) handleUploadPubImage(f);
-                          }}
-                          className="text-xs"
-                        />
-                        {uploadingPubImg && <span className="text-xs text-slate-500">Scanning...</span>}
-                        {pubImageUrl && <span className="font-mono text-xs text-emerald-600">{pubImageUrl}</span>}
+                  {pubType === 'product' && (
+                    <div className="space-y-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Market Suite (A–F / P)</label>
+                          <select
+                            value={pubMarketSuite}
+                            onChange={(e) => setPubMarketSuite(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-sm"
+                          >
+                            {MARKET_SUITES.map((ms) => (
+                              <option key={ms.id} value={ms.id}>
+                                Suite {ms.code} — {ms.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Delivery / Fulfillment Method</label>
+                          <select
+                            value={pubDeliveryMethod}
+                            onChange={(e) => setPubDeliveryMethod(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-sm"
+                          >
+                            {DELIVERY_METHODS.map((dm) => (
+                              <option key={dm.id} value={dm.id}>
+                                {dm.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Distribution / Ownership Rights (Required)</label>
+                          <input
+                            type="text"
+                            required
+                            minLength={5}
+                            value={pubDistPermission}
+                            onChange={(e) => setPubDistPermission(e.target.value)}
+                            placeholder="Original Publisher License / Authorized Reseller ID"
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Refund & Support Terms (Required)</label>
+                          <input
+                            type="text"
+                            required
+                            minLength={8}
+                            value={pubRefundTerms}
+                            onChange={(e) => setPubRefundTerms(e.target.value)}
+                            placeholder="14-day verified Pi dispute & defect support"
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
                       </div>
                     </div>
+                  )}
 
+                  {pubType === 'opportunity' && (
                     <div>
-                      <label className="block text-xs font-medium mb-1">
-                        Locked Digital Content / Course Materials (AES-256 encrypted, unlocked ONLY after Pi completion)
-                      </label>
-                      <textarea
-                        rows={3}
-                        value={pubLockedPayload}
-                        onChange={(e) => setPubLockedPayload(e.target.value)}
-                        placeholder="Download URLs, license instructions, or protected curriculum syllabus..."
+                      <label className="block text-xs font-medium mb-1">Eligibility & Target Regions</label>
+                      <input
+                        type="text"
+                        value={pubEligibility}
+                        onChange={(e) => setPubEligibility(e.target.value)}
+                        placeholder="Open globally to qualified applicants..."
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                       />
                     </div>
+                  )}
+
+                  {pubType === 'course' && (
+                    <div className="space-y-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-4">
+                      <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                        15-Point Paid Course Curriculum Requirements (Required when Pi Price &gt; 0)
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Language</label>
+                          <select
+                            value={pubLanguageCode}
+                            onChange={(e) => setPubLanguageCode(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          >
+                            {LANGUAGE_OPTIONS.map((l) => (
+                              <option key={l.code} value={l.code}>
+                                {l.nativeLabel} ({l.label})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Teaching Media URL (Video/Audio/Slide Deck)</label>
+                          <input
+                            type="url"
+                            value={pubMediaUrl}
+                            onChange={(e) => setPubMediaUrl(e.target.value)}
+                            placeholder="https://..."
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Learning Objectives (1 per line)</label>
+                          <textarea
+                            rows={2}
+                            value={pubObjectivesText}
+                            onChange={(e) => setPubObjectivesText(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Modules & Lesson Notes (Topic | Notes)</label>
+                          <textarea
+                            rows={2}
+                            value={pubModulesText}
+                            onChange={(e) => setPubModulesText(e.target.value)}
+                            placeholder="Module 1: Core Foundations | Detailed lesson notes..."
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Slides / Reading Materials (1 per line)</label>
+                          <textarea
+                            rows={2}
+                            value={pubSlidesText}
+                            onChange={(e) => setPubSlidesText(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Assignments / Projects (1 per line)</label>
+                          <textarea
+                            rows={2}
+                            value={pubAssignmentsText}
+                            onChange={(e) => setPubAssignmentsText(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Quizzes / Assessments (1 per line)</label>
+                          <textarea
+                            rows={2}
+                            value={pubQuizzesText}
+                            onChange={(e) => setPubQuizzesText(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Exam & Marking Guide</label>
+                          <textarea
+                            rows={2}
+                            value={pubExamGuide}
+                            onChange={(e) => setPubExamGuide(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Instructor Qualifications</label>
+                          <input
+                            type="text"
+                            value={pubInstructorQual}
+                            onChange={(e) => setPubInstructorQual(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Prerequisites & Audience</label>
+                          <input
+                            type="text"
+                            value={pubPrerequisites}
+                            onChange={(e) => setPubPrerequisites(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Copyright / Licensing Permission</label>
+                          <input
+                            type="text"
+                            value={pubCopyright}
+                            onChange={(e) => setPubCopyright(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Completion Certificate Criteria</label>
+                          <input
+                            type="text"
+                            value={pubCertificateCriteria}
+                            onChange={(e) => setPubCertificateCriteria(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Source Reference URL (Optional)</label>
+                    <input
+                      type="url"
+                      value={pubSourceUrl}
+                      onChange={(e) => setPubSourceUrl(e.target.value)}
+                      placeholder="https://..."
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
                   </div>
-                )}
 
-                <div>
-                  <label className="block text-xs font-medium mb-1">Verified Description / Summary</label>
-                  <textarea
-                    rows={4}
-                    required
-                    minLength={15}
-                    value={pubDescription}
-                    onChange={(e) => setPubDescription(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                  />
+                  {(pubType === 'product' || pubType === 'course') && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium mb-1">
+                          Verified Image Upload (PNG/JPEG/WEBP, scanned server-side)
+                        </label>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleUploadPubImage(f);
+                            }}
+                            className="text-xs"
+                          />
+                          {uploadingPubImg && <span className="text-xs text-slate-500">Scanning...</span>}
+                          {pubImageUrl && <span className="font-mono text-xs text-emerald-600">{pubImageUrl}</span>}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium mb-1">
+                          Locked Digital Content / Course Materials (AES-256 encrypted, unlocked ONLY after Pi completion)
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={pubLockedPayload}
+                          onChange={(e) => setPubLockedPayload(e.target.value)}
+                          placeholder="Download URLs, license instructions, or protected curriculum syllabus..."
+                          className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Verified Description / Summary</label>
+                    <textarea
+                      rows={4}
+                      required
+                      minLength={15}
+                      value={pubDescription}
+                      onChange={(e) => setPubDescription(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                  >
+                    Publish Verified Entry
+                  </button>
+                </form>
+
+                {/* Authorized Supplier API & Structured JSON Feed Integrations */}
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-5">
+                  <div>
+                    <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                      Authorized Supplier API & JSON Feed Integrations
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      Connect only authorized supplier feeds with valid public HTTPS endpoints and verified distribution licenses. Private/loopback hosts are blocked by SSRF policy.
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleAddSupplierIntegration} className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-b border-slate-200 dark:border-slate-800 pb-5">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Supplier / Publisher Name</label>
+                      <input
+                        type="text"
+                        required
+                        minLength={3}
+                        value={supName}
+                        onChange={(e) => setSupName(e.target.value)}
+                        placeholder="Authorized Partner Name"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Market Suite</label>
+                      <select
+                        value={supSuite}
+                        onChange={(e) => setSupSuite(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      >
+                        {MARKET_SUITES.map((ms) => (
+                          <option key={ms.id} value={ms.id}>
+                            Suite {ms.code} — {ms.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Integration Mode</label>
+                      <select
+                        value={supType}
+                        onChange={(e) => setSupType(e.target.value as typeof supType)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      >
+                        <option value="json_feed">Structured JSON Feed</option>
+                        <option value="authorized_api">Authorized Partner API</option>
+                        <option value="partner_portal">Partner Portal Import</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Public Feed URL (https://)</label>
+                      <input
+                        type="url"
+                        value={supFeedUrl}
+                        onChange={(e) => setSupFeedUrl(e.target.value)}
+                        placeholder="https://partner.example.com/catalog.json"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Distribution / Reseller License Proof</label>
+                      <input
+                        type="text"
+                        required
+                        minLength={5}
+                        value={supLicense}
+                        onChange={(e) => setSupLicense(e.target.value)}
+                        placeholder="Signed distribution agreement or publisher license ID"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Auth Header Name (Optional)</label>
+                      <input
+                        type="text"
+                        value={supAuthHeader}
+                        onChange={(e) => setSupAuthHeader(e.target.value)}
+                        placeholder="X-Partner-Key (key stored in server env)"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <button
+                        type="submit"
+                        className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                      >
+                        Register Authorized Supplier
+                      </button>
+                    </div>
+                  </form>
+
+                  {data.supplierIntegrations.length === 0 ? (
+                    <p className="text-xs text-slate-500">
+                      No external supplier feeds registered yet. Connect an authorized partner feed above when distribution credentials are verified.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg">
+                      {data.supplierIntegrations.map((sup) => (
+                        <div key={sup.id} className="p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+                          <div className="space-y-0.5 min-w-0">
+                            <div className="font-semibold text-sm text-slate-900 dark:text-white">{sup.supplier_name}</div>
+                            <div className="text-slate-500 font-mono">
+                              Suite: {sup.category_suite} · {sup.integration_type} · Status: {sup.status} · Imported:{' '}
+                              {sup.items_imported_count}
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              License: {sup.distribution_license} {sup.last_sync_status ? `· Last sync: ${sup.last_sync_status}` : ''}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                mutate(`/api/admin/supplier-integrations/${sup.id}`, 'PATCH', {
+                                  status: sup.status === 'active' ? 'paused' : 'active',
+                                })
+                              }
+                              className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 font-semibold cursor-pointer"
+                            >
+                              {sup.status === 'active' ? 'Pause' : 'Activate'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={syncingSupId === sup.id || !sup.feed_url}
+                              onClick={() => handleSyncSupplier(sup.id)}
+                              className="px-3 py-1 rounded bg-emerald-600 text-white font-semibold cursor-pointer disabled:opacity-50"
+                            >
+                              {syncingSupId === sup.id ? 'Syncing...' : 'Sync Feed'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
-                >
-                  Publish Verified Entry
-                </button>
-              </form>
+              </div>
             )}
 
             {tab === 'moderation' && (
@@ -1117,6 +1671,110 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                                 {String(t.platform_fee_pi)} π
                               </td>
                               <td className="py-3 px-4 font-mono uppercase">{String(t.payment_status || t.status)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <h2 className="font-display font-bold text-lg mb-3">Digital Entitlements Lock / Revoke Control</h2>
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B]">
+                    <table className="w-full text-left text-xs">
+                      <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                        <tr>
+                          <th className="py-3 px-4">Entitlement</th>
+                          <th className="py-3 px-4">Member</th>
+                          <th className="py-3 px-4">Item</th>
+                          <th className="py-3 px-4">Order Status</th>
+                          <th className="py-3 px-4">Lock State</th>
+                          <th className="py-3 px-4 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {data.entitlements.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-6 text-center text-slate-500">
+                              No digital product or course entitlements issued yet.
+                            </td>
+                          </tr>
+                        ) : (
+                          data.entitlements.map((ent) => {
+                            const unlocked = Number(ent.is_unlocked) === 1;
+                            const orderPaid = ['paid', 'fulfilled'].includes(String(ent.order_status));
+                            return (
+                              <tr key={String(ent.id)}>
+                                <td className="py-3 px-4 font-mono">
+                                  #{String(ent.id)} ({String(ent.item_type)})
+                                </td>
+                                <td className="py-3 px-4">{String(ent.user_name)}</td>
+                                <td className="py-3 px-4">{String(ent.item_title)}</td>
+                                <td className="py-3 px-4 font-mono uppercase">{String(ent.order_status)}</td>
+                                <td className="py-3 px-4 font-mono uppercase">
+                                  {unlocked ? 'UNLOCKED' : 'LOCKED'}
+                                </td>
+                                <td className="py-3 px-4 text-right">
+                                  <button
+                                    type="button"
+                                    disabled={!unlocked && !orderPaid}
+                                    onClick={() =>
+                                      mutate(
+                                        `/api/admin/entitlements/${ent.id}`,
+                                        'PATCH',
+                                        { isUnlocked: !unlocked },
+                                        unlocked ? 'Entitlement locked/revoked.' : 'Entitlement unlocked.'
+                                      )
+                                    }
+                                    className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 font-semibold cursor-pointer disabled:opacity-40"
+                                  >
+                                    {unlocked ? 'Revoke / Lock' : orderPaid ? 'Unlock' : 'Unpaid (Blocked)'}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <h2 className="font-display font-bold text-lg mb-3">Pi Network Testnet Payment Audit</h2>
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B]">
+                    <table className="w-full text-left text-xs">
+                      <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                        <tr>
+                          <th className="py-3 px-4">Pi Payment ID</th>
+                          <th className="py-3 px-4">Buyer UID</th>
+                          <th className="py-3 px-4">Reference</th>
+                          <th className="py-3 px-4 text-right">Amount</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4">TXID</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {data.piTestnetPayments.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-6 text-center text-slate-500">
+                              No Pi Testnet payments recorded yet.
+                            </td>
+                          </tr>
+                        ) : (
+                          data.piTestnetPayments.map((ptp) => (
+                            <tr key={String(ptp.id)}>
+                              <td className="py-3 px-4 font-mono">{String(ptp.pi_payment_id)}</td>
+                              <td className="py-3 px-4 font-mono">{String(ptp.pi_uid || '—')}</td>
+                              <td className="py-3 px-4">
+                                {String(ptp.target_type || 'checkout')} #{String(ptp.target_id || '0')}
+                              </td>
+                              <td className="py-3 px-4 text-right font-mono tabular-nums">{String(ptp.amount)} π</td>
+                              <td className="py-3 px-4 font-mono uppercase">{String(ptp.status)}</td>
+                              <td className="py-3 px-4 font-mono">
+                                {ptp.txid ? `${String(ptp.txid).slice(0, 14)}...` : '—'}
+                              </td>
                             </tr>
                           ))
                         )}
@@ -1383,17 +2041,21 @@ function ApprovalSection({
   items,
   renderTitle,
   renderStatus,
-  onApprove,
-  onReject,
+  renderExtra,
+  canApprove,
+  onModerate,
 }: {
   title: string;
   icon: typeof Building2;
   items: Array<Record<string, unknown>>;
   renderTitle: (item: Record<string, unknown>) => string;
   renderStatus: (item: Record<string, unknown>) => string;
-  onApprove: (id: number) => void;
-  onReject: (id: number) => void;
+  renderExtra?: (item: Record<string, unknown>) => ReactNode;
+  canApprove?: (item: Record<string, unknown>) => boolean;
+  onModerate: (id: number, action: 'approve' | 'suspend' | 'request_correction' | 'reject', reviewNotes: string) => void;
 }) {
+  const [notesById, setNotesById] = useState<Record<number, string>>({});
+
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2">
@@ -1409,28 +2071,60 @@ function ApprovalSection({
           {items.map((item) => {
             const id = Number(item.id);
             const status = renderStatus(item);
+            const modAction = typeof item.moderation_action === 'string' && item.moderation_action ? item.moderation_action : '';
+            const existingNotes = typeof item.review_notes === 'string' ? item.review_notes : '';
+            const draftNote = notesById[id] ?? existingNotes;
+            const approveAllowed = canApprove ? canApprove(item) : true;
             return (
-              <div key={id} className="p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div>
-                  <div className="font-semibold text-sm text-slate-900 dark:text-white">{renderTitle(item)}</div>
-                  <div className="font-mono uppercase text-slate-500 mt-0.5">Status: {status}</div>
+              <div key={id} className="p-4 space-y-3 text-xs">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold text-sm text-slate-900 dark:text-white">{renderTitle(item)}</div>
+                    <div className="font-mono uppercase text-slate-500 mt-0.5">
+                      Status: {status}
+                      {modAction ? ` · Action: ${modAction}` : ''}
+                    </div>
+                    {renderExtra && renderExtra(item)}
+                  </div>
+                  <div className="flex flex-wrap gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={!approveAllowed}
+                      onClick={() => onModerate(id, 'approve', draftNote)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer disabled:opacity-40"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onModerate(id, 'request_correction', draftNote)}
+                      className="px-3 py-1.5 rounded-lg border border-amber-400 text-amber-700 dark:text-amber-300 font-semibold cursor-pointer"
+                    >
+                      Request Corrections
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onModerate(id, 'suspend', draftNote)}
+                      className="px-3 py-1.5 rounded-lg border border-slate-400 text-slate-700 dark:text-slate-300 font-semibold cursor-pointer"
+                    >
+                      Suspend
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onModerate(id, 'reject', draftNote)}
+                      className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 font-semibold cursor-pointer"
+                    >
+                      Reject
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onApprove(id)}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer"
-                  >
-                    Approve
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onReject(id)}
-                    className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 font-semibold cursor-pointer"
-                  >
-                    Reject
-                  </button>
-                </div>
+                <input
+                  type="text"
+                  value={draftNote}
+                  onChange={(e) => setNotesById((prev) => ({ ...prev, [id]: e.target.value }))}
+                  placeholder="Optional admin review feedback / correction notes sent to member..."
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-1.5 text-xs"
+                />
               </div>
             );
           })}

@@ -21,15 +21,17 @@ router.get('/overview', requireAuth, (req, res) => {
   const instructorProfile = db.prepare(`SELECT * FROM instructors WHERE user_id = ?`).get(uid);
   const myCourses = instructorProfile
     ? db.prepare(`
-        SELECT id, instructor_id, title, slug, category, level, duration_hours, price_pi,
-               approval_status, source_origin, availability_status, last_verified_at, created_at
+        SELECT id, instructor_id, title, slug, category, subject, language_code, level, duration_hours, price_pi,
+               approval_status, moderation_action, review_notes, completeness_score,
+               source_origin, availability_status, last_verified_at, created_at
         FROM courses WHERE instructor_id = ? ORDER BY created_at DESC
       `).all((instructorProfile as { id: number }).id)
     : [];
 
   const businesses = db.prepare(`
-    SELECT id, owner_user_id, business_name, registration_number, sector, country, website,
-           summary, services_offered, verification_status, source_origin, availability_status, last_verified_at, created_at
+    SELECT id, owner_user_id, business_name, registration_number, sector, hub_category, country, website,
+           summary, services_offered, verification_status, moderation_action, review_notes,
+           source_origin, availability_status, last_verified_at, created_at
     FROM business_profiles WHERE owner_user_id = ? ORDER BY created_at DESC
   `).all(uid);
   const myServices = db.prepare(`SELECT * FROM freelance_services WHERE freelancer_user_id = ? ORDER BY created_at DESC`).all(uid);
@@ -46,8 +48,10 @@ router.get('/overview', requireAuth, (req, res) => {
   const sellerProfile = db.prepare(`SELECT * FROM sellers WHERE user_id = ?`).get(uid);
   const myProducts = sellerProfile
     ? db.prepare(`
-        SELECT id, seller_id, title, category, product_type, description, price_pi, stock_qty,
-               image_url, approval_status, source_origin, availability_status, last_verified_at, created_at
+        SELECT id, seller_id, title, category, market_suite, product_type, description, price_pi, stock_qty,
+               image_url, approval_status, moderation_action, review_notes, delivery_method,
+               distribution_permission, refund_support_terms,
+               source_origin, availability_status, last_verified_at, created_at
         FROM products WHERE seller_id = ? ORDER BY created_at DESC
       `).all((sellerProfile as { id: number }).id)
     : [];

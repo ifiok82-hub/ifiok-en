@@ -113,6 +113,7 @@ export interface Course {
   instructor_user_id?: number;
   instructor_name: string;
   instructor_headline?: string;
+  instructor_credentials?: string;
   title: string;
   slug: string;
   category: string;
@@ -124,9 +125,29 @@ export interface Course {
   duration_hours: number;
   price_pi: number;
   syllabus_json: string;
+  learning_objectives_json?: string;
+  modules_notes_json?: string;
+  media_lesson_url?: string;
+  slides_resources_json?: string;
+  assignments_json?: string;
+  quizzes_json?: string;
+  exam_marking_guide?: string;
+  instructor_qualifications_snapshot?: string;
+  prerequisites?: string;
+  copyright_permission?: string;
+  certificate_criteria?: string;
+  completeness_score?: number;
+  completeness_total?: number;
+  completeness_complete?: boolean;
+  completeness_missing?: string[];
+  module_topics_count?: number;
+  assignments_count?: number;
+  quizzes_count?: number;
   description: string;
   image_url?: string;
   approval_status: string;
+  moderation_action?: string;
+  review_notes?: string;
   is_featured: number;
   source_origin?: string;
   source_url?: string;
@@ -145,11 +166,14 @@ export interface BusinessProfile {
   business_name: string;
   registration_number: string;
   sector: string;
+  hub_category?: string;
   country: string;
   website: string;
   summary: string;
   services_offered: string;
   verification_status: string;
+  moderation_action?: string;
+  review_notes?: string;
   is_featured: number;
   source_origin?: string;
   source_url?: string;
@@ -166,9 +190,13 @@ export interface FreelanceService {
   title: string;
   category: string;
   description: string;
+  deliverables?: string;
+  credentials_summary?: string;
   delivery_days: number;
   price_pi: number;
   approval_status: string;
+  moderation_action?: string;
+  review_notes?: string;
   source_origin?: string;
   availability_status?: string;
   last_verified_at?: string | null;
@@ -180,7 +208,7 @@ export interface Opportunity {
   poster_user_id: number;
   poster_name: string;
   title: string;
-  opportunity_type: 'job' | 'internship' | 'scholarship' | 'grant' | 'partnership';
+  opportunity_type: 'job' | 'internship' | 'scholarship' | 'grant' | 'fellowship' | 'competition' | 'partnership';
   organization_name: string;
   location: string;
   is_remote: number;
@@ -188,8 +216,11 @@ export interface Opportunity {
   deadline: string;
   description: string;
   requirements: string;
+  eligibility?: string;
   external_url: string;
   approval_status: string;
+  moderation_action?: string;
+  review_notes?: string;
   source_origin?: string;
   source_url?: string;
   availability_status?: string;
@@ -205,14 +236,20 @@ export interface Product {
   seller_country: string;
   title: string;
   category: string;
+  market_suite?: string;
   product_type: 'physical' | 'digital' | 'service' | 'web3' | 'pi_app' | 'gaming_asset';
   description: string;
   price_pi: number;
   stock_qty: number;
   image_url?: string;
   approval_status: string;
+  moderation_action?: string;
+  review_notes?: string;
   source_origin?: string;
   source_url?: string;
+  distribution_permission?: string;
+  delivery_method?: string;
+  refund_support_terms?: string;
   availability_status?: string;
   last_verified_at?: string | null;
   has_locked_content?: number;
@@ -231,8 +268,27 @@ export interface CommunityPost {
   post_type: 'discussion' | 'announcement' | 'collaboration';
   title: string;
   body: string;
+  event_date?: string;
+  event_location?: string;
   moderation_status: string;
+  moderation_action?: string;
+  review_notes?: string;
   reports_count: number;
+  created_at: string;
+}
+
+export interface SupplierIntegration {
+  id: number;
+  supplier_name: string;
+  category_suite: string;
+  feed_url: string;
+  integration_type: 'authorized_api' | 'json_feed' | 'partner_portal';
+  distribution_license: string;
+  auth_header_name?: string;
+  status: 'active' | 'paused' | 'pending_verification';
+  last_sync_at?: string | null;
+  last_sync_status?: string;
+  items_imported_count: number;
   created_at: string;
 }
 

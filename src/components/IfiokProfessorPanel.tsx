@@ -20,6 +20,7 @@ import { apiRequest } from '../lib/api.ts';
 import {
   ACADEMIC_SUBJECTS,
   getBcp47ForLanguage,
+  getLanguageAvailabilitySummary,
   isRtlLanguage,
   LANGUAGE_OPTIONS,
   TRANSLATIONS,
@@ -461,7 +462,7 @@ export function IfiokProfessorPanel({
               {t.professorTagline}
             </h2>
             <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-              Clear AI disclosure: IFIOK Professor is an automated AI learning assistant supporting your studies across 17 academic subjects and 15 languages alongside qualified human educators.
+              Clear AI disclosure: IFIOK Professor is an automated AI learning assistant supporting your studies across {ACADEMIC_SUBJECTS.length} academic subjects and {getLanguageAvailabilitySummary().fullUiLanguagesCount} verified languages alongside qualified human educators.
               {user && (user.age_group === 'under_13' || user.age_group === 'teen_13_17')
                 ? ' Strict Child Protection safety filters are automatically active for your account.'
                 : ''}

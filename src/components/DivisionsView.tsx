@@ -19,7 +19,18 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api.ts';
-import { ACADEMIC_SUBJECTS, COUNTRIES, formatPiPrice, LANGUAGE_OPTIONS } from '../lib/i18n.ts';
+import {
+  ACADEMIC_SUBJECTS,
+  BUSINESS_HUB_CATEGORIES,
+  COMMUNITY_SPACES,
+  COUNTRIES,
+  DELIVERY_METHODS,
+  formatPiPrice,
+  FREELANCE_CATEGORIES,
+  LANGUAGE_OPTIONS,
+  MARKET_SUITES,
+  OPPORTUNITY_TYPES,
+} from '../lib/i18n.ts';
 import { startPiPaymentFlow } from '../lib/pi.ts';
 import type {
   AcademySubView,
@@ -97,6 +108,12 @@ export function DivisionsView({
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
 
+  // Division-specific filters & detail modal
+  const [hubCategoryFilter, setHubCategoryFilter] = useState('All');
+  const [marketSuiteFilter, setMarketSuiteFilter] = useState('all');
+  const [marketCategoryFilter, setMarketCategoryFilter] = useState('All');
+  const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+
   // Modals / Drawers
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [applyOpp, setApplyOpp] = useState<Opportunity | null>(null);
@@ -124,6 +141,30 @@ export function DivisionsView({
   const [unlockedPreview, setUnlockedPreview] = useState<{ title: string; content: string; unlockedAt: string } | null>(null);
   const [subMode, setSubMode] = useState<'primary' | 'onboarding'>('primary');
 
+  // Expanded division creation fields
+  const [fHubCategory, setFHubCategory] = useState<string>(BUSINESS_HUB_CATEGORIES[0]);
+  const [fMarketSuite, setFMarketSuite] = useState<string>(MARKET_SUITES[0].id);
+  const [fDeliveryMethod, setFDeliveryMethod] = useState<string>(DELIVERY_METHODS[0].id);
+  const [fDistPermission, setFDistPermission] = useState('');
+  const [fRefundTerms, setFRefundTerms] = useState('');
+  const [fDeliverables, setFDeliverables] = useState('');
+  const [fCredentials, setFCredentials] = useState('');
+  const [fEligibility, setFEligibility] = useState('');
+  const [fEventDate, setFEventDate] = useState('');
+  const [fEventLocation, setFEventLocation] = useState('');
+  // 15-point IFIOK SCHOOL curriculum fields
+  const [fObjectives, setFObjectives] = useState('');
+  const [fModulesNotes, setFModulesNotes] = useState('');
+  const [fMediaUrl, setFMediaUrl] = useState('');
+  const [fSlides, setFSlides] = useState('');
+  const [fAssignments, setFAssignments] = useState('');
+  const [fQuizzes, setFQuizzes] = useState('');
+  const [fExamGuide, setFExamGuide] = useState('');
+  const [fInstructorQual, setFInstructorQual] = useState('');
+  const [fPrerequisites, setFPrerequisites] = useState('');
+  const [fCopyright, setFCopyright] = useState('');
+  const [fCertCriteria, setFCertCriteria] = useState('');
+
   // Action modal fields
   const [actionNote, setActionNote] = useState('');
   const [actionUrl, setActionUrl] = useState('');
@@ -138,7 +179,7 @@ export function DivisionsView({
         setCourses(res.courses);
       } else if (activeTab === 'business') {
         const res = await apiRequest<{ businesses: BusinessProfile[] }>(
-          `/api/divisions/businesses?sector=${encodeURIComponent(filterValue)}&q=${encodeURIComponent(searchQuery)}`
+          `/api/divisions/businesses?sector=${encodeURIComponent(filterValue)}&hubCategory=${encodeURIComponent(hubCategoryFilter)}&q=${encodeURIComponent(searchQuery)}`
         );
         setBusinesses(res.businesses);
       } else if (activeTab === 'freelance') {
@@ -153,7 +194,7 @@ export function DivisionsView({
         setOpportunities(res.opportunities);
       } else if (activeTab === 'market') {
         const res = await apiRequest<{ products: Product[] }>(
-          `/api/divisions/products?type=${encodeURIComponent(filterValue === 'All' ? 'all' : filterValue)}&q=${encodeURIComponent(searchQuery)}`
+          `/api/divisions/products?type=${encodeURIComponent(filterValue === 'All' ? 'all' : filterValue)}&suite=${encodeURIComponent(marketSuiteFilter)}&category=${encodeURIComponent(marketCategoryFilter)}&q=${encodeURIComponent(searchQuery)}`
         );
         setProducts(res.products);
       } else if (activeTab === 'community') {
@@ -168,7 +209,7 @@ export function DivisionsView({
     } finally {
       setLoading(false);
     }
-  }, [activeTab, filterValue, courseLangFilter, searchQuery]);
+  }, [activeTab, filterValue, courseLangFilter, searchQuery, hubCategoryFilter, marketSuiteFilter, marketCategoryFilter]);
 
   useEffect(() => {
     loadTab();
@@ -176,6 +217,9 @@ export function DivisionsView({
 
   useEffect(() => {
     setFilterValue('All');
+    setHubCategoryFilter('All');
+    setMarketSuiteFilter('all');
+    setMarketCategoryFilter('All');
     setCourseLangFilter('all');
     setSearchQuery('');
     setShowCreateModal(false);
@@ -198,6 +242,27 @@ export function DivisionsView({
     setFSourceOrigin('');
     setFSourceUrl('');
     setFLockedContent('');
+    setFHubCategory(BUSINESS_HUB_CATEGORIES[0]);
+    setFMarketSuite(MARKET_SUITES[0].id);
+    setFDeliveryMethod(DELIVERY_METHODS[0].id);
+    setFDistPermission('');
+    setFRefundTerms('');
+    setFDeliverables('');
+    setFCredentials('');
+    setFEligibility('');
+    setFEventDate('');
+    setFEventLocation('');
+    setFObjectives('');
+    setFModulesNotes('');
+    setFMediaUrl('');
+    setFSlides('');
+    setFAssignments('');
+    setFQuizzes('');
+    setFExamGuide('');
+    setFInstructorQual('');
+    setFPrerequisites('');
+    setFCopyright('');
+    setFCertCriteria('');
   };
 
   const handleUploadImage = async (file: File) => {
@@ -249,11 +314,20 @@ export function DivisionsView({
       setFSubject(ACADEMIC_SUBJECTS[0]);
       setFCourseLang(language);
       setFIssuingOrg('IFIOK SCHOOL');
+      setFExtra2('Beginner');
+    } else if (activeTab === 'market') {
+      setFCategory('digital');
+      setFMarketSuite(MARKET_SUITES[0].id);
+      setFExtra1(MARKET_SUITES[0].subcategories[0]);
+      setFDeliveryMethod(DELIVERY_METHODS[0].id);
+    } else if (activeTab === 'freelance') {
+      setFCategory(FREELANCE_CATEGORIES[0]);
+    } else if (activeTab === 'opportunities') {
+      setFCategory('job');
+    } else if (activeTab === 'community') {
+      setFCategory('discussion');
+      setFExtra1(COMMUNITY_SPACES[0]);
     }
-    else if (activeTab === 'market') setFCategory('digital');
-    else if (activeTab === 'freelance') setFCategory('Software Development');
-    else if (activeTab === 'opportunities') setFCategory('job');
-    else if (activeTab === 'community') setFCategory('discussion');
     setShowCreateModal(true);
   };
 
@@ -376,6 +450,46 @@ export function DivisionsView({
     }
   };
 
+  const parsedModulesNotes = fModulesNotes
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split('|');
+      return {
+        topic: (parts[0] || '').trim(),
+        notes: (parts.slice(1).join('|') || '').trim(),
+      };
+    });
+
+  const courseCompletenessPreview = (() => {
+    const syllabusCount = fExtra1.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
+    const objCount = fObjectives.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
+    const topicCount = parsedModulesNotes.filter((m) => m.topic.length >= 3).length;
+    const noteCount = parsedModulesNotes.filter((m) => m.notes.length >= 15).length;
+    const slideCount = fSlides.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
+    const assignCount = fAssignments.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
+    const quizCount = fQuizzes.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
+    const checks = [
+      fTitle.trim().length >= 5 && fDescription.trim().length >= 20,
+      syllabusCount >= 2,
+      objCount >= 2,
+      topicCount >= 2,
+      noteCount >= 1,
+      fMediaUrl.trim().length >= 8 || fLockedContent.trim().length >= 12 || noteCount >= 2,
+      slideCount >= 1,
+      assignCount >= 1,
+      quizCount >= 1,
+      fExamGuide.trim().length >= 15,
+      fInstructorQual.trim().length >= 5,
+      Number(fNum2) >= 1 && (fExtra2 || 'Beginner').trim().length >= 3,
+      fCourseLang.length >= 2 && fPrerequisites.trim().length >= 3,
+      fCopyright.trim().length >= 5,
+      fCertCriteria.trim().length >= 8,
+    ];
+    return checks.filter(Boolean).length;
+  })();
+
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -391,10 +505,11 @@ export function DivisionsView({
         });
         notify('ok', `Instructor application submitted (${res.approvalStatus}).`);
       } else if (activeTab === 'academy') {
-        const syllabus = fExtra1
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean);
+        const syllabus = fExtra1.split('\n').map((s) => s.trim()).filter(Boolean);
+        const learningObjectives = fObjectives.split('\n').map((s) => s.trim()).filter(Boolean);
+        const slidesResources = fSlides.split('\n').map((s) => s.trim()).filter(Boolean);
+        const assignments = fAssignments.split('\n').map((s) => s.trim()).filter(Boolean);
+        const quizzes = fQuizzes.split('\n').map((s) => s.trim()).filter(Boolean);
         const res = await apiRequest<{ approvalStatus: string }>('/api/divisions/courses', {
           method: 'POST',
           body: JSON.stringify({
@@ -408,19 +523,31 @@ export function DivisionsView({
             pricePi: Number(fNum1) || 0,
             description: fDescription,
             syllabus: syllabus.length ? syllabus : undefined,
+            learningObjectives,
+            modulesNotes: parsedModulesNotes,
+            mediaLessonUrl: fMediaUrl,
+            slidesResources,
+            assignments,
+            quizzes,
+            examMarkingGuide: fExamGuide,
+            instructorQualifications: fInstructorQual,
+            prerequisites: fPrerequisites,
+            copyrightPermission: fCopyright,
+            certificateCriteria: fCertCriteria,
             imageUrl: fImageUrl,
             sourceOrigin: fSourceOrigin || 'Authorized Educational Material',
             sourceUrl: fSourceUrl,
             lockedMaterials: fLockedContent,
           }),
         });
-        notify('ok', `Course created with status: ${res.approvalStatus}.`);
+        notify('ok', `Course submitted with status: ${res.approvalStatus} (${courseCompletenessPreview}/15 curriculum checklist).`);
       } else if (activeTab === 'business') {
         const res = await apiRequest<{ verificationStatus: string }>('/api/divisions/businesses', {
           method: 'POST',
           body: JSON.stringify({
             businessName: fTitle,
             sector: fCategory,
+            hubCategory: fHubCategory,
             country: fExtra1 || 'Global',
             registrationNumber: fExtra2,
             website: fExtra3,
@@ -438,6 +565,8 @@ export function DivisionsView({
             title: fTitle,
             category: fCategory,
             description: fDescription,
+            deliverables: fDeliverables,
+            credentialsSummary: fCredentials,
             pricePi: Number(fNum1),
             deliveryDays: Number(fNum2),
             sourceOrigin: fSourceOrigin || 'Verified Freelancer Listing',
@@ -454,9 +583,10 @@ export function DivisionsView({
             location: fExtra2 || 'Global',
             isRemote: fBool,
             compensationOrAward: fExtra3 || 'Disclosed upon shortlist',
-            deadline: fNum1 || '2026-12-31',
+            eligibility: fEligibility,
+            deadline: fNum1 === '10' ? '2026-12-31' : fNum1 || '2026-12-31',
             description: fDescription,
-            requirements: fDescription,
+            requirements: fEligibility || fDescription,
             sourceOrigin: fSourceOrigin || 'Issuing Organization Confirmed',
             sourceUrl: fSourceUrl,
           }),
@@ -478,10 +608,14 @@ export function DivisionsView({
           body: JSON.stringify({
             title: fTitle,
             productType: fCategory,
-            category: fExtra1 || 'Electronics & Tech',
+            marketSuite: fMarketSuite,
+            category: fExtra1 || MARKET_SUITES[0].subcategories[0],
             description: fDescription,
             pricePi: Number(fNum1),
             stockQty: Number(fNum2) || 1,
+            deliveryMethod: fDeliveryMethod,
+            distributionPermission: fDistPermission,
+            refundSupportTerms: fRefundTerms,
             imageUrl: fImageUrl,
             sourceOrigin: fSourceOrigin || 'Genuine Seller Submission',
             sourceUrl: fSourceUrl,
@@ -495,8 +629,10 @@ export function DivisionsView({
           body: JSON.stringify({
             title: fTitle,
             postType: fCategory,
-            groupName: fExtra1 || 'Global Builders',
+            groupName: fExtra1 || COMMUNITY_SPACES[0],
             body: fDescription,
+            eventDate: fEventDate,
+            eventLocation: fEventLocation,
           }),
         });
         notify('ok', 'Community post published.');
@@ -612,19 +748,33 @@ export function DivisionsView({
               </select>
             )}
 
+            {activeTab === 'business' && (
+              <select
+                value={hubCategoryFilter}
+                onChange={(e) => setHubCategoryFilter(e.target.value)}
+                className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
+              >
+                <option value="All">All Business Hub Categories</option>
+                {BUSINESS_HUB_CATEGORIES.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            )}
+
             {activeTab === 'freelance' && (
               <select
                 value={filterValue}
                 onChange={(e) => setFilterValue(e.target.value)}
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
               >
-                <option value="All">All Services</option>
-                <option value="Graphic Design">Graphic Design</option>
-                <option value="Website Development">Website Development</option>
-                <option value="Software Development">Software Development</option>
-                <option value="Writing & Translation">Writing & Translation</option>
-                <option value="Digital Marketing">Digital Marketing</option>
-                <option value="Consulting">Consulting</option>
+                <option value="All">All 8 Freelance Categories</option>
+                {FREELANCE_CATEGORIES.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
               </select>
             )}
 
@@ -634,28 +784,75 @@ export function DivisionsView({
                 onChange={(e) => setFilterValue(e.target.value)}
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
               >
-                <option value="All">All Types</option>
-                <option value="job">Jobs</option>
-                <option value="internship">Internships</option>
-                <option value="scholarship">Scholarships</option>
-                <option value="grant">Grants</option>
-                <option value="partnership">Partnerships</option>
+                <option value="All">All 7 Opportunity Types</option>
+                {OPPORTUNITY_TYPES.map((ot) => (
+                  <option key={ot.id} value={ot.id}>
+                    {ot.label}
+                  </option>
+                ))}
               </select>
             )}
 
             {activeTab === 'market' && (
+              <>
+                <select
+                  value={marketSuiteFilter}
+                  onChange={(e) => {
+                    setMarketSuiteFilter(e.target.value);
+                    setMarketCategoryFilter('All');
+                  }}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
+                >
+                  <option value="all">All Market Suites (A–F & Physical)</option>
+                  {MARKET_SUITES.map((suite) => (
+                    <option key={suite.id} value={suite.id}>
+                      Suite {suite.code}: {suite.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={marketCategoryFilter}
+                  onChange={(e) => setMarketCategoryFilter(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
+                >
+                  <option value="All">All Categories</option>
+                  {(marketSuiteFilter === 'all'
+                    ? MARKET_SUITES.flatMap((s) => [...s.subcategories])
+                    : [...(MARKET_SUITES.find((s) => s.id === marketSuiteFilter)?.subcategories || [])]
+                  ).map((sub) => (
+                    <option key={sub} value={sub}>
+                      {sub}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={filterValue}
+                  onChange={(e) => setFilterValue(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
+                >
+                  <option value="All">All Fulfillment Formats</option>
+                  <option value="digital">Digital Products & Software</option>
+                  <option value="physical">Verified Physical Goods</option>
+                  <option value="service">Digital Services</option>
+                  <option value="web3">Web3 Products & Services</option>
+                  <option value="pi_app">Verified Pi Apps</option>
+                  <option value="gaming_asset">Blockchain Gaming Assets</option>
+                </select>
+              </>
+            )}
+
+            {activeTab === 'community' && (
               <select
                 value={filterValue}
                 onChange={(e) => setFilterValue(e.target.value)}
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
               >
-                <option value="All">All Product Types</option>
-                <option value="physical">Physical Products (Electronics, Fashion, Home & Office)</option>
-                <option value="digital">Digital Products & Software</option>
-                <option value="service">Digital Services</option>
-                <option value="web3">Web3 Products & Services</option>
-                <option value="pi_app">Verified Pi Apps</option>
-                <option value="gaming_asset">Blockchain Gaming Assets</option>
+                <option value="All">All 6 Community Spaces</option>
+                {COMMUNITY_SPACES.map((space) => (
+                  <option key={space} value={space}>
+                    {space}
+                  </option>
+                ))}
               </select>
             )}
           </div>
@@ -749,7 +946,7 @@ export function DivisionsView({
                         className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-3"
                       >
                         <div className="text-xs text-slate-500 dark:text-slate-400">
-                          {b.sector} · {b.country} · {b.source_origin || 'Verified SME'}
+                          {b.hub_category || 'Verified SMEs'} · {b.sector} · {b.country} · {b.source_origin || 'Verified SME'}
                           {b.last_verified_at ? ` · Verified ${b.last_verified_at.slice(0, 10)}` : ''}
                         </div>
                         <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
@@ -759,6 +956,19 @@ export function DivisionsView({
                         <div className="pt-3 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 space-y-1">
                           <div>Services: {b.services_offered}</div>
                           {b.registration_number && <div className="font-mono">Reg ID: {b.registration_number}</div>}
+                          {b.website && (
+                            <div>
+                              Website:{' '}
+                              <a
+                                href={b.website}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-purple-700 dark:text-amber-400 hover:underline break-all"
+                              >
+                                {b.website}
+                              </a>
+                            </div>
+                          )}
                         </div>
                       </article>
                     ))}
@@ -773,7 +983,7 @@ export function DivisionsView({
                 {services.length === 0 ? (
                   <EmptyDivisionState
                     title="No approved freelance services listed yet"
-                    description="Publish your graphic design, software engineering, writing, or consulting service to collaborate with global clients."
+                    description="Publish verified services across Programming, Graphic Design, Website Development, Writing, Translation, Video Editing, Digital Marketing, or Consulting."
                     actionLabel="List a Freelance Service"
                     onAction={() => handleOpenCreate('primary')}
                   />
@@ -793,8 +1003,14 @@ export function DivisionsView({
                             </div>
                             <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">{s.title}</h3>
                             <p className="text-sm text-slate-600 dark:text-slate-300">{s.description}</p>
+                            {s.deliverables && (
+                              <p className="text-xs text-slate-600 dark:text-slate-300">
+                                Deliverables: {s.deliverables}
+                              </p>
+                            )}
                             <p className="text-xs text-slate-500">
                               Specialist: {s.freelancer_name} ({s.freelancer_country})
+                              {s.credentials_summary ? ` · ${s.credentials_summary}` : ''}
                             </p>
                           </div>
                           <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
@@ -828,7 +1044,7 @@ export function DivisionsView({
                 {opportunities.length === 0 ? (
                   <EmptyDivisionState
                     title="No verified opportunities currently open"
-                    description="IFIOK-EN strictly forbids fake job offers, synthetic grants, or unverified scholarships. Verified organisations can submit real opportunities for approval."
+                    description="IFIOK-EN strictly forbids fake job offers, synthetic grants, or unverified scholarships. Verified organisations can submit real jobs, internships, scholarships, grants, fellowships, competitions, or partnerships for approval."
                     actionLabel="Post Real Opportunity"
                     onAction={() => handleOpenCreate('primary')}
                   />
@@ -853,8 +1069,13 @@ export function DivisionsView({
                           </span>
                         </div>
                         <p className="text-sm text-slate-600 dark:text-slate-300">{o.description}</p>
+                        {o.eligibility && (
+                          <div className="text-xs text-slate-600 dark:text-slate-300">
+                            Eligibility: {o.eligibility}
+                          </div>
+                        )}
                         <div className="text-xs text-slate-500 dark:text-slate-400">
-                          Source: {o.source_origin || 'Issuing Organization Confirmed'}
+                          Free to Apply · Not a Paid Product · Source: {o.source_origin || 'Issuing Organization Confirmed'}
                           {o.last_verified_at ? ` · Verified ${o.last_verified_at.slice(0, 10)}` : ''}
                         </div>
                         <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
@@ -887,7 +1108,7 @@ export function DivisionsView({
                 {products.length === 0 ? (
                   <EmptyDivisionState
                     title="No approved marketplace products yet"
-                    description="We never populate IFIOK Market with fake products, fake prices, or fake sellers. Verified sellers can register a storefront and list genuine items."
+                    description="IFIOK Market never publishes fake products, synthetic prices, or unverified sellers. Verified creators and authorized partners can register a storefront and list licensed digital suites or genuine goods."
                     actionLabel="Register Seller Storefront"
                     onAction={() => handleOpenCreate('onboarding')}
                   />
@@ -895,6 +1116,8 @@ export function DivisionsView({
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {products.map((p) => {
                       const price = formatPiPrice(p.price_pi, currency, usdRate);
+                      const suiteInfo = MARKET_SUITES.find((ms) => ms.id === p.market_suite);
+                      const deliveryLabel = DELIVERY_METHODS.find((dm) => dm.id === p.delivery_method)?.label || p.delivery_method;
                       return (
                         <article
                           key={p.id}
@@ -913,25 +1136,27 @@ export function DivisionsView({
                             )}
                             <div className="p-6 space-y-2">
                               <div className="text-xs text-slate-500 dark:text-slate-400">
-                                {p.product_type.replace('_', ' ')} · {p.category} · Stock {p.stock_qty} ·{' '}
-                                {p.availability_status || 'available'}
+                                {suiteInfo ? `Suite ${suiteInfo.code}: ${suiteInfo.label}` : p.product_type.replace('_', ' ')} · {p.category} ·{' '}
+                                {p.availability_status || 'available'} · Stock {p.stock_qty}
                                 {p.approval_status !== 'approved' && ` · ${p.approval_status}`}
                               </div>
                               <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">{p.title}</h3>
-                              <p className="text-sm text-slate-600 dark:text-slate-300">{p.description}</p>
-                              <div className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5">
+                              <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-3">{p.description}</p>
+                              <div className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5 pt-1">
                                 <div>
                                   Seller: {p.store_name} ({p.seller_country})
                                 </div>
+                                {deliveryLabel && <div>Delivery: {deliveryLabel}</div>}
                                 <div>
                                   Origin: {p.source_origin || 'Seller Submission'}
                                   {p.last_verified_at ? ` · Verified ${p.last_verified_at.slice(0, 10)}` : ''}
                                 </div>
+                                {p.distribution_permission && <div>Rights: {p.distribution_permission}</div>}
                               </div>
                               {p.product_type !== 'physical' && (
                                 <div className="flex items-center justify-between pt-1 text-xs">
                                   <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
-                                    <Lock className="w-3.5 h-3.5" /> Auto-locked until Pi verified
+                                    <Lock className="w-3.5 h-3.5" /> Locked until Pi verified
                                   </span>
                                   <button
                                     type="button"
@@ -944,19 +1169,28 @@ export function DivisionsView({
                               )}
                             </div>
                           </div>
-                          <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+                          <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
                             <div>
                               <div className="font-mono font-bold text-slate-950 dark:text-amber-400">{price.primary}</div>
                               {price.reference && <div className="text-[11px] font-mono text-slate-500">{price.reference}</div>}
                             </div>
-                            <button
-                              type="button"
-                              disabled={p.stock_qty < 1}
-                              onClick={() => addToCart(p)}
-                              className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-40"
-                            >
-                              {p.stock_qty < 1 ? 'Out of Stock' : 'Add to Pi Cart'}
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setDetailProduct(p)}
+                                className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                              >
+                                Details
+                              </button>
+                              <button
+                                type="button"
+                                disabled={p.stock_qty < 1 || p.availability_status === 'out_of_stock'}
+                                onClick={() => addToCart(p)}
+                                className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-40"
+                              >
+                                {p.stock_qty < 1 || p.availability_status === 'out_of_stock' ? 'Out of Stock' : 'Add to Pi Cart'}
+                              </button>
+                            </div>
                           </div>
                         </article>
                       );
@@ -971,12 +1205,12 @@ export function DivisionsView({
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                 <div className="lg:col-span-8 space-y-4">
                   <h3 className="font-display font-bold text-lg text-slate-950 dark:text-white">
-                    Community Discussions & Announcements
+                    Community Discussions, Mentorship & Verified Events
                   </h3>
                   {posts.length === 0 ? (
                     <EmptyDivisionState
                       title="No community posts published yet"
-                      description="Start a constructive discussion, business announcement, or collaboration thread with global IFIOK-EN members."
+                      description="Start a constructive discussion, business collaboration thread, developer group topic, or verified event announcement with global IFIOK-EN members."
                       actionLabel="Create First Post"
                       onAction={() => handleOpenCreate('primary')}
                     />
@@ -1000,6 +1234,13 @@ export function DivisionsView({
                           </button>
                         </div>
                         <h4 className="font-display font-bold text-slate-950 dark:text-white">{post.title}</h4>
+                        {(post.event_date || post.event_location) && (
+                          <div className="text-xs font-mono text-purple-700 dark:text-amber-400">
+                            {post.event_date ? `Event Date: ${post.event_date}` : ''}
+                            {post.event_date && post.event_location ? ' · ' : ''}
+                            {post.event_location ? `Location: ${post.event_location}` : ''}
+                          </div>
+                        )}
                         <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">
                           {post.body}
                         </p>
@@ -1052,7 +1293,7 @@ export function DivisionsView({
       {/* CREATE / ONBOARDING MODAL */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 overflow-y-auto">
-          <div className="w-full max-w-lg rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-4 my-8">
+          <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-4 my-8 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-display font-bold text-lg text-slate-950 dark:text-white">
                 {activeTab === 'academy' && subMode === 'onboarding' && 'Apply as IFIOK SCHOOL Educator / Instructor'}
@@ -1096,7 +1337,7 @@ export function DivisionsView({
                       {activeTab === 'opportunities'
                         ? 'Opportunity Type'
                         : activeTab === 'market'
-                          ? 'Product Type'
+                          ? 'Fulfillment Format'
                           : activeTab === 'community'
                             ? 'Post Type'
                             : 'Category'}
@@ -1124,12 +1365,11 @@ export function DivisionsView({
                         onChange={(e) => setFCategory(e.target.value)}
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                       >
-                        <option value="Software Development">Software Development</option>
-                        <option value="Website Development">Website Development</option>
-                        <option value="Graphic Design">Graphic Design</option>
-                        <option value="Writing & Translation">Writing & Translation</option>
-                        <option value="Digital Marketing">Digital Marketing</option>
-                        <option value="Consulting">Consulting</option>
+                        {FREELANCE_CATEGORIES.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
                       </select>
                     )}
                     {activeTab === 'opportunities' && (
@@ -1138,11 +1378,11 @@ export function DivisionsView({
                         onChange={(e) => setFCategory(e.target.value)}
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                       >
-                        <option value="job">Job</option>
-                        <option value="internship">Internship</option>
-                        <option value="scholarship">Scholarship</option>
-                        <option value="grant">Grant / Funding</option>
-                        <option value="partnership">Business Partnership</option>
+                        {OPPORTUNITY_TYPES.map((ot) => (
+                          <option key={ot.id} value={ot.id}>
+                            {ot.label}
+                          </option>
+                        ))}
                       </select>
                     )}
                     {activeTab === 'market' && (
@@ -1166,7 +1406,7 @@ export function DivisionsView({
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                       >
                         <option value="discussion">Discussion</option>
-                        <option value="announcement">Business Announcement</option>
+                        <option value="announcement">Announcement / Event</option>
                         <option value="collaboration">Collaboration</option>
                       </select>
                     )}
@@ -1177,20 +1417,48 @@ export function DivisionsView({
                       {activeTab === 'opportunities'
                         ? 'Organization Name'
                         : activeTab === 'community'
-                          ? 'Group Name'
+                          ? 'Community Space'
                           : activeTab === 'market'
-                            ? 'Sub-Category'
+                            ? 'Market Suite (A–F & Physical)'
                             : 'Price in Pi (π)'}
                     </label>
-                    {['opportunities', 'community', 'market'].includes(activeTab) ? (
+                    {activeTab === 'opportunities' ? (
                       <input
                         type="text"
-                        required={activeTab === 'opportunities'}
+                        required
                         value={fExtra1}
                         onChange={(e) => setFExtra1(e.target.value)}
-                        placeholder={activeTab === 'community' ? 'Global Builders' : ''}
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                       />
+                    ) : activeTab === 'community' ? (
+                      <select
+                        value={fExtra1 || COMMUNITY_SPACES[0]}
+                        onChange={(e) => setFExtra1(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        {COMMUNITY_SPACES.map((space) => (
+                          <option key={space} value={space}>
+                            {space}
+                          </option>
+                        ))}
+                      </select>
+                    ) : activeTab === 'market' ? (
+                      <select
+                        value={fMarketSuite}
+                        onChange={(e) => {
+                          const nextSuiteId = e.target.value;
+                          setFMarketSuite(nextSuiteId);
+                          const matchedSuite = MARKET_SUITES.find((ms) => ms.id === nextSuiteId);
+                          if (matchedSuite) setFExtra1(matchedSuite.subcategories[0]);
+                        }}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        {MARKET_SUITES.map((ms) => (
+                          <option key={ms.id} value={ms.id}>
+                            Suite {ms.code}: {ms.label}
+                          </option>
+                        ))}
+                      </select>
                     ) : (
                       <input
                         type="number"
@@ -1207,7 +1475,21 @@ export function DivisionsView({
               )}
 
               {activeTab === 'business' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Hub Category</label>
+                    <select
+                      value={fHubCategory}
+                      onChange={(e) => setFHubCategory(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    >
+                      {BUSINESS_HUB_CATEGORIES.map((hc) => (
+                        <option key={hc} value={hc}>
+                          {hc}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Sector</label>
                     <input
@@ -1236,82 +1518,232 @@ export function DivisionsView({
                 </div>
               )}
 
-              {activeTab === 'market' && subMode === 'primary' && (
-                <div className="grid grid-cols-2 gap-3">
+              {activeTab === 'freelance' && subMode === 'primary' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium mb-1">Price in Pi (π)</label>
+                    <label className="block text-xs font-medium mb-1">Deliverables Included</label>
                     <input
-                      type="number"
-                      min="0.1"
-                      step="0.1"
-                      required
-                      value={fNum1}
-                      onChange={(e) => setFNum1(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                      type="text"
+                      value={fDeliverables}
+                      onChange={(e) => setFDeliverables(e.target.value)}
+                      placeholder="Source repository, deployment docs & 2 revisions"
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1">Stock Quantity</label>
+                    <label className="block text-xs font-medium mb-1">Delivery Timeline (Days)</label>
                     <input
                       type="number"
                       min="1"
-                      required
+                      max="180"
                       value={fNum2}
                       onChange={(e) => setFNum2(e.target.value)}
                       className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
                     />
                   </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-medium mb-1">Credentials & Portfolio Summary</label>
+                    <input
+                      type="text"
+                      value={fCredentials}
+                      onChange={(e) => setFCredentials(e.target.value)}
+                      placeholder="Verified specialist background or portfolio reference"
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'market' && subMode === 'primary' && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Suite Sub-Category</label>
+                      <select
+                        value={fExtra1}
+                        onChange={(e) => setFExtra1(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        {(MARKET_SUITES.find((ms) => ms.id === fMarketSuite)?.subcategories || []).map((sub) => (
+                          <option key={sub} value={sub}>
+                            {sub}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Delivery Method</label>
+                      <select
+                        value={fDeliveryMethod}
+                        onChange={(e) => setFDeliveryMethod(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      >
+                        {DELIVERY_METHODS.map((dm) => (
+                          <option key={dm.id} value={dm.id}>
+                            {dm.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Price in Pi (π)</label>
+                      <input
+                        type="number"
+                        min="0.1"
+                        step="0.1"
+                        required
+                        value={fNum1}
+                        onChange={(e) => setFNum1(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Stock / License Units</label>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={fNum2}
+                        onChange={(e) => setFNum2(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">
+                        Ownership / Distribution Permission (Required)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        minLength={5}
+                        value={fDistPermission}
+                        onChange={(e) => setFDistPermission(e.target.value)}
+                        placeholder="Original Creator Copyright / Authorized Reseller License"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">
+                        Refund & Support Terms (Required)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        minLength={8}
+                        value={fRefundTerms}
+                        onChange={(e) => setFRefundTerms(e.target.value)}
+                        placeholder="14-day verified Pi dispute & defective license support"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
 
               {activeTab === 'opportunities' && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Location</label>
+                      <input
+                        type="text"
+                        value={fExtra2}
+                        onChange={(e) => setFExtra2(e.target.value)}
+                        placeholder="London / Remote"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Award / Compensation</label>
+                      <input
+                        type="text"
+                        value={fExtra3}
+                        onChange={(e) => setFExtra3(e.target.value)}
+                        placeholder="Competitive / Grant"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Deadline</label>
+                      <input
+                        type="date"
+                        required
+                        value={fNum1 === '10' ? '2026-12-31' : fNum1}
+                        onChange={(e) => setFNum1(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                      />
+                    </div>
+                  </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1">Location</label>
+                    <label className="block text-xs font-medium mb-1">Eligibility Criteria</label>
                     <input
                       type="text"
-                      value={fExtra2}
-                      onChange={(e) => setFExtra2(e.target.value)}
-                      placeholder="London / Remote"
+                      value={fEligibility}
+                      onChange={(e) => setFEligibility(e.target.value)}
+                      placeholder="Open to international students, builders, or qualified applicants"
                       className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
                     />
                   </div>
+                </div>
+              )}
+
+              {activeTab === 'community' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium mb-1">Award / Compensation</label>
+                    <label className="block text-xs font-medium mb-1">Event Date (Optional, for Events/Sessions)</label>
                     <input
                       type="text"
-                      value={fExtra3}
-                      onChange={(e) => setFExtra3(e.target.value)}
-                      placeholder="Competitive / Grant"
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      value={fEventDate}
+                      onChange={(e) => setFEventDate(e.target.value)}
+                      placeholder="2026-11-30 16:00 UTC"
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1">Deadline</label>
+                    <label className="block text-xs font-medium mb-1">Event Location / Online Room (Optional)</label>
                     <input
-                      type="date"
-                      required
-                      value={fNum1 === '10' ? '2026-12-31' : fNum1}
-                      onChange={(e) => setFNum1(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
+                      type="text"
+                      value={fEventLocation}
+                      onChange={(e) => setFEventLocation(e.target.value)}
+                      placeholder="Virtual Session / London Hub"
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
                     />
                   </div>
                 </div>
               )}
 
               {subMode === 'onboarding' && (
-                <div>
-                  <label className="block text-xs font-medium mb-1">
-                    {activeTab === 'academy' ? 'Expertise Areas' : 'Country'}
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={fExtra1}
-                    onChange={(e) => setFExtra1(e.target.value)}
-                    placeholder={activeTab === 'academy' ? 'Web3, TypeScript, SME Finance' : 'United Kingdom'}
-                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
-                  />
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">
+                      {activeTab === 'academy' ? 'Expertise Areas' : 'Country'}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={fExtra1}
+                      onChange={(e) => setFExtra1(e.target.value)}
+                      placeholder={activeTab === 'academy' ? 'Web3, TypeScript, SME Finance' : 'United Kingdom'}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                    />
+                  </div>
+                  {activeTab === 'academy' && (
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Verified Credentials & Qualifications</label>
+                      <input
+                        type="text"
+                        required
+                        value={fExtra2}
+                        onChange={(e) => setFExtra2(e.target.value)}
+                        placeholder="MSc Computer Science / Certified Instructor"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1320,7 +1752,7 @@ export function DivisionsView({
                   Description / Details
                 </label>
                 <textarea
-                  rows={4}
+                  rows={3}
                   required
                   minLength={15}
                   value={fDescription}
@@ -1330,8 +1762,16 @@ export function DivisionsView({
               </div>
 
               {activeTab === 'academy' && subMode === 'primary' && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-[#081024] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-900 dark:text-white">
+                      IFIOK SCHOOL 15-Point Paid Course Readiness
+                    </span>
+                    <span className="font-mono text-xs font-bold text-purple-700 dark:text-amber-400">
+                      {courseCompletenessPreview}/15 checks complete
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                     <div>
                       <label className="block text-xs font-medium mb-1">Academic Subject</label>
                       <select
@@ -1340,7 +1780,7 @@ export function DivisionsView({
                           setFSubject(e.target.value);
                           setFCategory(e.target.value);
                         }}
-                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-2.5 py-1.5 text-xs"
                       >
                         {ACADEMIC_SUBJECTS.map((subj) => (
                           <option key={subj} value={subj}>
@@ -1354,7 +1794,7 @@ export function DivisionsView({
                       <select
                         value={fCourseLang}
                         onChange={(e) => setFCourseLang(e.target.value as LanguageCode)}
-                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-2.5 py-1.5 text-xs"
                       >
                         {LANGUAGE_OPTIONS.map((l) => (
                           <option key={l.code} value={l.code}>
@@ -1364,25 +1804,170 @@ export function DivisionsView({
                       </select>
                     </div>
                     <div>
+                      <label className="block text-xs font-medium mb-1">Level</label>
+                      <select
+                        value={fExtra2 || 'Beginner'}
+                        onChange={(e) => setFExtra2(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-2.5 py-1.5 text-xs"
+                      >
+                        <option value="Beginner">Beginner</option>
+                        <option value="Intermediate">Intermediate</option>
+                        <option value="Advanced">Advanced</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Duration (Hours)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="200"
+                        value={fNum2}
+                        onChange={(e) => setFNum2(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-2.5 py-1.5 text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
                       <label className="block text-xs font-medium mb-1">Issuing Organization</label>
                       <input
                         type="text"
                         value={fIssuingOrg}
                         onChange={(e) => setFIssuingOrg(e.target.value)}
                         placeholder="IFIOK SCHOOL"
-                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Instructor Qualifications</label>
+                      <input
+                        type="text"
+                        value={fInstructorQual}
+                        onChange={(e) => setFInstructorQual(e.target.value)}
+                        placeholder="Degree, teaching certification, industry experience"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Syllabus Outline (2+ lines)</label>
+                      <textarea
+                        rows={2}
+                        value={fExtra1}
+                        onChange={(e) => setFExtra1(e.target.value)}
+                        placeholder={'Module 1: Foundations\nModule 2: Applied Labs'}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Learning Objectives (2+ lines)</label>
+                      <textarea
+                        rows={2}
+                        value={fObjectives}
+                        onChange={(e) => setFObjectives(e.target.value)}
+                        placeholder={'Design secure workflows\nBuild and audit applications'}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
                       />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1">Syllabus Lessons (one per line)</label>
+                    <label className="block text-xs font-medium mb-1">
+                      Module Topics & Prepared Lesson Notes (2+ lines, format: Topic | Detailed Lesson Notes)
+                    </label>
                     <textarea
-                      rows={3}
-                      value={fExtra1}
-                      onChange={(e) => setFExtra1(e.target.value)}
-                      placeholder={'Module 1: Architecture Foundations\nModule 2: Security & Payments\nModule 3: Capstone'}
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm"
+                      rows={2}
+                      value={fModulesNotes}
+                      onChange={(e) => setFModulesNotes(e.target.value)}
+                      placeholder={'Module 1 Architecture | Step-by-step study notes covering core protocols and worked examples.\nModule 2 Security | Detailed lesson guide on validation, authorization, and edge cases.'}
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
                     />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Teaching Video / Lesson Media URL</label>
+                      <input
+                        type="url"
+                        value={fMediaUrl}
+                        onChange={(e) => setFMediaUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Prerequisites</label>
+                      <input
+                        type="text"
+                        value={fPrerequisites}
+                        onChange={(e) => setFPrerequisites(e.target.value)}
+                        placeholder="Basic digital literacy or introductory algebra"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Slides / Resources (1+ line)</label>
+                      <textarea
+                        rows={2}
+                        value={fSlides}
+                        onChange={(e) => setFSlides(e.target.value)}
+                        placeholder="Lecture Deck PDF & Workbook"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Assignments (1+ line)</label>
+                      <textarea
+                        rows={2}
+                        value={fAssignments}
+                        onChange={(e) => setFAssignments(e.target.value)}
+                        placeholder="Week 1 Applied Exercise"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Quizzes (1+ line)</label>
+                      <textarea
+                        rows={2}
+                        value={fQuizzes}
+                        onChange={(e) => setFQuizzes(e.target.value)}
+                        placeholder="Module 1 Diagnostic Quiz"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Examination Questions & Marking Guide</label>
+                    <textarea
+                      rows={2}
+                      value={fExamGuide}
+                      onChange={(e) => setFExamGuide(e.target.value)}
+                      placeholder="Final assessment rubric, pass threshold (70%), and grading criteria..."
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Copyright / Distribution Permission</label>
+                      <input
+                        type="text"
+                        value={fCopyright}
+                        onChange={(e) => setFCopyright(e.target.value)}
+                        placeholder="Original Author License for IFIOK SCHOOL"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Completion & Certificate Criteria</label>
+                      <input
+                        type="text"
+                        value={fCertCriteria}
+                        onChange={(e) => setFCertCriteria(e.target.value)}
+                        placeholder="100% syllabus completion + >=70% exam score"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -1453,7 +2038,7 @@ export function DivisionsView({
                           rows={2}
                           value={fLockedContent}
                           onChange={(e) => setFLockedContent(e.target.value)}
-                          placeholder="Download link, access instructions, or course syllabus materials..."
+                          placeholder="Download link, license instructions, or protected course materials..."
                           className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
                         />
                       </div>
@@ -1478,6 +2063,123 @@ export function DivisionsView({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MARKET PRODUCT DETAIL & PROVENANCE MODAL */}
+      {detailProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 overflow-y-auto">
+          <div className="w-full max-w-xl rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-4 my-8">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">
+                  {MARKET_SUITES.find((ms) => ms.id === detailProduct.market_suite)?.label || detailProduct.product_type} ·{' '}
+                  {detailProduct.category}
+                </div>
+                <h3 className="font-display font-bold text-lg text-slate-950 dark:text-white mt-0.5">
+                  {detailProduct.title}
+                </h3>
+              </div>
+              <button type="button" onClick={() => setDetailProduct(null)} className="cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">{detailProduct.description}</p>
+            <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-4 space-y-2 text-xs">
+              <div>
+                <span className="text-slate-500">Verified Seller:</span>{' '}
+                <span className="font-semibold text-slate-900 dark:text-white">
+                  {detailProduct.store_name} ({detailProduct.seller_country})
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500">Source Origin:</span>{' '}
+                <span className="text-slate-800 dark:text-slate-200">{detailProduct.source_origin || 'Seller Submission'}</span>
+                {detailProduct.source_url && (
+                  <>
+                    {' · '}
+                    <a
+                      href={detailProduct.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-purple-700 dark:text-amber-400 hover:underline"
+                    >
+                      Source Reference
+                    </a>
+                  </>
+                )}
+              </div>
+              <div>
+                <span className="text-slate-500">Ownership / Distribution Permission:</span>{' '}
+                <span className="text-slate-800 dark:text-slate-200">
+                  {detailProduct.distribution_permission || 'Verified seller distribution rights'}
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500">Delivery Method:</span>{' '}
+                <span className="text-slate-800 dark:text-slate-200">
+                  {DELIVERY_METHODS.find((dm) => dm.id === detailProduct.delivery_method)?.label ||
+                    detailProduct.delivery_method ||
+                    'Verified fulfillment'}
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500">Availability & Stock:</span>{' '}
+                <span className="font-mono text-slate-800 dark:text-slate-200">
+                  {detailProduct.availability_status || 'available'} ({detailProduct.stock_qty} units)
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500">Refund & Support Terms:</span>{' '}
+                <span className="text-slate-800 dark:text-slate-200">
+                  {detailProduct.refund_support_terms || 'Covered by IFIOK-EN Pi Dispute Policy'}
+                </span>
+              </div>
+              {detailProduct.last_verified_at && (
+                <div>
+                  <span className="text-slate-500">Last Verified:</span>{' '}
+                  <span className="font-mono text-slate-800 dark:text-slate-200">{detailProduct.last_verified_at}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div>
+                <div className="font-mono text-lg font-bold text-slate-950 dark:text-amber-400">
+                  {formatPiPrice(detailProduct.price_pi, currency, usdRate).primary}
+                </div>
+                {formatPiPrice(detailProduct.price_pi, currency, usdRate).reference && (
+                  <div className="text-[11px] font-mono text-slate-500">
+                    {formatPiPrice(detailProduct.price_pi, currency, usdRate).reference}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {detailProduct.product_type !== 'physical' && (
+                  <button
+                    type="button"
+                    onClick={() => handleAccessUnlocked('product', detailProduct.id)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Access Content</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={detailProduct.stock_qty < 1 || detailProduct.availability_status === 'out_of_stock'}
+                  onClick={() => {
+                    addToCart(detailProduct);
+                    setDetailProduct(null);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-40"
+                >
+                  {detailProduct.stock_qty < 1 || detailProduct.availability_status === 'out_of_stock'
+                    ? 'Out of Stock'
+                    : 'Add to Pi Cart'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

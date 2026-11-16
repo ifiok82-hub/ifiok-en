@@ -584,6 +584,13 @@ export function initDatabase() {
   ensureColumn('products', 'availability_status', "TEXT NOT NULL DEFAULT 'available'");
   ensureColumn('products', 'last_verified_at', 'TEXT');
   ensureColumn('products', 'locked_content_enc', "TEXT DEFAULT ''");
+  ensureColumn('products', 'market_suite', "TEXT NOT NULL DEFAULT 'software_productivity'");
+  ensureColumn('products', 'distribution_permission', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('products', 'delivery_method', "TEXT NOT NULL DEFAULT 'instant_digital_download'");
+  ensureColumn('products', 'refund_support_terms', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('products', 'supplier_id', 'INTEGER');
+  ensureColumn('products', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('products', 'review_notes', "TEXT NOT NULL DEFAULT ''");
 
   ensureColumn('courses', 'image_url', "TEXT DEFAULT ''");
   ensureColumn('courses', 'source_origin', "TEXT NOT NULL DEFAULT 'Authorized Educational Material'");
@@ -595,26 +602,133 @@ export function initDatabase() {
   ensureColumn('courses', 'language_code', "TEXT NOT NULL DEFAULT 'en'");
   ensureColumn('courses', 'school_id', 'INTEGER');
   ensureColumn('courses', 'issuing_organization', "TEXT NOT NULL DEFAULT 'IFIOK SCHOOL'");
+  ensureColumn('courses', 'learning_objectives_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('courses', 'modules_notes_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('courses', 'media_lesson_url', "TEXT DEFAULT ''");
+  ensureColumn('courses', 'slides_resources_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('courses', 'assignments_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('courses', 'quizzes_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('courses', 'exam_marking_guide', "TEXT DEFAULT ''");
+  ensureColumn('courses', 'instructor_qualifications_snapshot', "TEXT DEFAULT ''");
+  ensureColumn('courses', 'prerequisites', "TEXT DEFAULT ''");
+  ensureColumn('courses', 'copyright_permission', "TEXT DEFAULT ''");
+  ensureColumn('courses', 'certificate_criteria', "TEXT DEFAULT ''");
+  ensureColumn('courses', 'completeness_score', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('courses', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('courses', 'review_notes', "TEXT NOT NULL DEFAULT ''");
 
   ensureColumn('business_profiles', 'source_origin', "TEXT NOT NULL DEFAULT 'Verified Business Submission'");
   ensureColumn('business_profiles', 'source_url', "TEXT DEFAULT ''");
   ensureColumn('business_profiles', 'availability_status', "TEXT NOT NULL DEFAULT 'available'");
   ensureColumn('business_profiles', 'last_verified_at', 'TEXT');
   ensureColumn('business_profiles', 'registration_number_enc', "TEXT DEFAULT ''");
+  ensureColumn('business_profiles', 'hub_category', "TEXT NOT NULL DEFAULT 'Verified SMEs'");
+  ensureColumn('business_profiles', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('business_profiles', 'review_notes', "TEXT NOT NULL DEFAULT ''");
 
   ensureColumn('freelance_services', 'source_origin', "TEXT NOT NULL DEFAULT 'Verified Freelancer Listing'");
   ensureColumn('freelance_services', 'availability_status', "TEXT NOT NULL DEFAULT 'available'");
   ensureColumn('freelance_services', 'last_verified_at', 'TEXT');
+  ensureColumn('freelance_services', 'deliverables', "TEXT DEFAULT ''");
+  ensureColumn('freelance_services', 'credentials_summary', "TEXT DEFAULT ''");
+  ensureColumn('freelance_services', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('freelance_services', 'review_notes', "TEXT NOT NULL DEFAULT ''");
 
   ensureColumn('opportunities', 'source_origin', "TEXT NOT NULL DEFAULT 'Issuing Organization Confirmed'");
   ensureColumn('opportunities', 'source_url', "TEXT DEFAULT ''");
   ensureColumn('opportunities', 'availability_status', "TEXT NOT NULL DEFAULT 'available'");
   ensureColumn('opportunities', 'last_verified_at', 'TEXT');
+  ensureColumn('opportunities', 'eligibility', "TEXT DEFAULT ''");
+  ensureColumn('opportunities', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('opportunities', 'review_notes', "TEXT NOT NULL DEFAULT ''");
+
+  ensureColumn('community_posts', 'event_date', "TEXT DEFAULT ''");
+  ensureColumn('community_posts', 'event_location', "TEXT DEFAULT ''");
+  ensureColumn('community_posts', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('community_posts', 'review_notes', "TEXT NOT NULL DEFAULT ''");
+
+  ensureColumn('instructors', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('instructors', 'review_notes', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('sellers', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('sellers', 'review_notes', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('schools', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('schools', 'review_notes', "TEXT NOT NULL DEFAULT ''");
 
   ensureColumn('orders', 'fulfillment_status', "TEXT NOT NULL DEFAULT 'locked_awaiting_payment'");
   ensureColumn('orders', 'idempotency_key', 'TEXT');
 
+  // Safely widen opportunities.opportunity_type CHECK to include 'fellowship' and 'competition'
+  const oppTableSql = db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'opportunities'`)
+    .get() as { sql: string } | undefined;
+  if (oppTableSql && !oppTableSql.sql.includes("'competition'")) {
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE opportunities_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            poster_user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            opportunity_type TEXT NOT NULL CHECK (opportunity_type IN ('job', 'internship', 'scholarship', 'grant', 'fellowship', 'competition', 'partnership')),
+            organization_name TEXT NOT NULL,
+            location TEXT NOT NULL,
+            is_remote INTEGER NOT NULL DEFAULT 0,
+            compensation_or_award TEXT NOT NULL,
+            deadline TEXT NOT NULL,
+            description TEXT NOT NULL,
+            requirements TEXT NOT NULL,
+            external_url TEXT DEFAULT '',
+            approval_status TEXT NOT NULL DEFAULT 'pending' CHECK (approval_status IN ('pending', 'approved', 'rejected')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            source_origin TEXT NOT NULL DEFAULT 'Issuing Organization Confirmed',
+            source_url TEXT DEFAULT '',
+            availability_status TEXT NOT NULL DEFAULT 'available',
+            last_verified_at TEXT,
+            eligibility TEXT DEFAULT '',
+            moderation_action TEXT NOT NULL DEFAULT '',
+            review_notes TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (poster_user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+          INSERT INTO opportunities_new (
+            id, poster_user_id, title, opportunity_type, organization_name, location, is_remote,
+            compensation_or_award, deadline, description, requirements, external_url, approval_status,
+            created_at, source_origin, source_url, availability_status, last_verified_at,
+            eligibility, moderation_action, review_notes
+          )
+          SELECT
+            id, poster_user_id, title, opportunity_type, organization_name, location, is_remote,
+            compensation_or_award, deadline, description, requirements, external_url, approval_status,
+            created_at, source_origin, source_url, availability_status, last_verified_at,
+            eligibility, moderation_action, review_notes
+          FROM opportunities;
+          DROP TABLE opportunities;
+          ALTER TABLE opportunities_new RENAME TO opportunities;
+        `);
+      })();
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+  }
+
   db.exec(`
+    CREATE TABLE IF NOT EXISTS supplier_integrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier_name TEXT NOT NULL,
+      category_suite TEXT NOT NULL DEFAULT 'software_productivity',
+      feed_url TEXT DEFAULT '',
+      integration_type TEXT NOT NULL DEFAULT 'json_feed' CHECK (integration_type IN ('authorized_api', 'json_feed', 'partner_portal')),
+      distribution_license TEXT NOT NULL DEFAULT '',
+      auth_header_name TEXT DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending_verification' CHECK (status IN ('active', 'paused', 'pending_verification')),
+      last_sync_at TEXT,
+      last_sync_status TEXT DEFAULT 'not_synced',
+      items_imported_count INTEGER NOT NULL DEFAULT 0,
+      created_by_user_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
     CREATE TABLE IF NOT EXISTS pi_testnet_payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       payment_id TEXT UNIQUE NOT NULL,

@@ -15,13 +15,25 @@ import {
 import { useEffect, useState } from 'react';
 import certFolioImg from '../assets/images/ifiok_academy_folio_1794728475006.jpg';
 import { apiRequest } from '../lib/api.ts';
-import { ACADEMIC_SUBJECTS, formatPiPrice, LANGUAGE_OPTIONS, TRANSLATIONS } from '../lib/i18n.ts';
+import {
+  ACADEMIC_SUBJECTS,
+  formatPiPrice,
+  getLanguageAvailabilitySummary,
+  LANGUAGE_OPTIONS,
+  TRANSLATIONS,
+} from '../lib/i18n.ts';
 import type { AcademySubView, Course, CurrencyCode, LanguageCode, UserProfile } from '../types/platform.ts';
 import { IfiokProfessorPanel } from './IfiokProfessorPanel.tsx';
 import { SchoolManagementPortal } from './SchoolManagementPortal.tsx';
 
 interface ClassroomData {
   course: Course;
+  completeness?: {
+    score: number;
+    total: number;
+    complete: boolean;
+    missing: string[];
+  };
   enrolment: {
     id: number;
     progress_percent: number;
@@ -177,7 +189,7 @@ export function GlobalAcademyHub({
               {t.schoolDivisionName || 'IFIOK SCHOOL — Global Digital Learning'}
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Comprehensive multilingual education, institutional school administration, teacher tools, guardian oversight, verified curricula, and IFIOK Professor AI across 15 global languages.
+              Comprehensive multilingual education, institutional school administration, teacher tools, guardian oversight, 15-point verified curricula, and IFIOK Professor AI across {getLanguageAvailabilitySummary().fullUiLanguagesCount} verified languages.
             </p>
           </div>
           <label className="inline-flex items-center gap-1.5 text-xs text-slate-200 bg-white/10 rounded-lg px-3 py-2 border border-white/15">
@@ -347,7 +359,13 @@ export function GlobalAcademyHub({
                         <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-3">{c.description}</p>
                         <div className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5">
                           <div>Instructor: {c.instructor_name}</div>
+                          {c.instructor_credentials && (
+                            <div className="truncate">Credentials: {c.instructor_credentials}</div>
+                          )}
                           <div>Issuing Org: {c.issuing_organization || 'IFIOK SCHOOL'}</div>
+                          <div>
+                            Curriculum Completeness: {c.completeness_score ?? 0}/{c.completeness_total ?? 15} sections
+                          </div>
                           <div>
                             Source: {c.source_origin || 'Authorized Material'}
                             {c.last_verified_at ? ` · Verified ${c.last_verified_at.slice(0, 10)}` : ''}
@@ -492,7 +510,17 @@ export function GlobalAcademyHub({
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 <div className="lg:col-span-6 space-y-3">
-                  <h4 className="font-display font-bold text-sm">Syllabus & Lesson Progress</h4>
+                  <h4 className="font-display font-bold text-sm">Syllabus & Learning Objectives</h4>
+                  {(() => {
+                    const objectives = JSON.parse(classroom.course.learning_objectives_json || '[]') as string[];
+                    return objectives.length > 0 ? (
+                      <ul className="list-disc list-inside text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                        {objectives.map((obj, idx) => (
+                          <li key={`obj-${idx}`}>{obj}</li>
+                        ))}
+                      </ul>
+                    ) : null;
+                  })()}
                   {(JSON.parse(classroom.course.syllabus_json || '[]') as string[]).map((lesson, idx) => {
                     const completed = JSON.parse(
                       classroom.enrolment?.completed_lessons_json || '[]'
@@ -515,6 +543,16 @@ export function GlobalAcademyHub({
                       </label>
                     );
                   })}
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                    <div><strong>Prerequisites:</strong> {classroom.course.prerequisites || 'None specified'}</div>
+                    <div><strong>Copyright & Distribution:</strong> {classroom.course.copyright_permission || 'Verified Instructor Curriculum'}</div>
+                    <div><strong>Certificate Criteria:</strong> {classroom.course.certificate_criteria || 'Complete all modules and assessments'}</div>
+                    {classroom.completeness && (
+                      <div className="font-mono text-[11px] text-slate-500">
+                        Curriculum Completeness: {classroom.completeness.score}/{classroom.completeness.total} requirements verified
+                      </div>
+                    )}
+                  </div>
                   {classroom.enrolment && (
                     <div className="text-xs font-mono text-slate-600 dark:text-slate-300">
                       Progress: {classroom.enrolment.progress_percent}%
@@ -526,15 +564,69 @@ export function GlobalAcademyHub({
                 </div>
 
                 <div className="lg:col-span-6 space-y-3">
-                  <h4 className="font-display font-bold text-sm">Protected Course Materials</h4>
+                  <h4 className="font-display font-bold text-sm">Protected Course Materials, Assessments & Exam Guide</h4>
                   {classroom.unlocked ? (
-                    <div className="rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 p-4 space-y-2">
+                    <div className="rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 p-4 space-y-3">
                       <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
                         <Unlock className="w-3.5 h-3.5" /> Unlocked Access Verified
                       </div>
                       <p className="text-xs text-slate-800 dark:text-slate-200 whitespace-pre-wrap">
                         {classroom.materials || classroom.course.description}
                       </p>
+                      {classroom.course.media_lesson_url && (
+                        <div className="text-xs">
+                          <strong>Video / Lesson Media:</strong>{' '}
+                          <a href={classroom.course.media_lesson_url} target="_blank" rel="noreferrer" className="underline text-purple-700 dark:text-amber-300">
+                            {classroom.course.media_lesson_url}
+                          </a>
+                        </div>
+                      )}
+                      {(() => {
+                        const modNotes = JSON.parse(classroom.course.modules_notes_json || '[]') as Array<{ topic?: string; notes?: string } | string>;
+                        const slides = JSON.parse(classroom.course.slides_resources_json || '[]') as string[];
+                        const assigns = JSON.parse(classroom.course.assignments_json || '[]') as string[];
+                        const quizzes = JSON.parse(classroom.course.quizzes_json || '[]') as string[];
+                        return (
+                          <div className="space-y-2.5 text-xs border-t border-emerald-200 dark:border-emerald-800 pt-2.5">
+                            {modNotes.length > 0 && (
+                              <div>
+                                <div className="font-semibold mb-1">Module Lesson Notes ({modNotes.length})</div>
+                                <ul className="space-y-1 text-slate-700 dark:text-slate-200">
+                                  {modNotes.map((m, i) => (
+                                    <li key={`mn-${i}`}>
+                                      {typeof m === 'string' ? m : `${m.topic || `Module ${i + 1}`}: ${m.notes || ''}`}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {slides.length > 0 && (
+                              <div>
+                                <div className="font-semibold mb-1">Slides & Downloadable Resources ({slides.length})</div>
+                                <ul className="list-disc list-inside">{slides.map((s, i) => <li key={`sl-${i}`}>{s}</li>)}</ul>
+                              </div>
+                            )}
+                            {assigns.length > 0 && (
+                              <div>
+                                <div className="font-semibold mb-1">Assignments & Exercises ({assigns.length})</div>
+                                <ul className="list-disc list-inside">{assigns.map((a, i) => <li key={`as-${i}`}>{a}</li>)}</ul>
+                              </div>
+                            )}
+                            {quizzes.length > 0 && (
+                              <div>
+                                <div className="font-semibold mb-1">Quizzes & Assessments ({quizzes.length})</div>
+                                <ul className="list-disc list-inside">{quizzes.map((q, i) => <li key={`qz-${i}`}>{q}</li>)}</ul>
+                              </div>
+                            )}
+                            {classroom.course.exam_marking_guide && (
+                              <div>
+                                <div className="font-semibold mb-1">Examination Questions & Marking Guide</div>
+                                <p className="whitespace-pre-wrap text-slate-700 dark:text-slate-200">{classroom.course.exam_marking_guide}</p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : (
                     <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-2">
@@ -542,7 +634,7 @@ export function GlobalAcademyHub({
                         <Lock className="w-3.5 h-3.5" /> Locked Until Pi Network Payment Confirmed
                       </div>
                       <p className="text-xs text-slate-600 dark:text-slate-300">
-                        Paid curriculum materials stay server-encrypted and locked until Pi Testnet settlement completes.
+                        Prepared lesson notes, downloadable slides, assignments, quizzes, and examination marking guides remain server-encrypted and locked until Pi Testnet settlement completes.
                       </p>
                       <button
                         type="button"

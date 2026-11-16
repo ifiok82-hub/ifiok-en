@@ -3,6 +3,10 @@ import { Router } from 'express';
 import { db, getSettingsMap } from '../db.ts';
 import { encryptSensitive, sanitizeHttpUrl } from '../lib/crypto.ts';
 import {
+  evaluateCourseCompleteness,
+  MARKET_SUITE_IDS,
+} from '../lib/courseCompleteness.ts';
+import {
   assignRole,
   createNotification,
   optionalAuth,
@@ -17,25 +21,26 @@ router.get('/public-summary', (_req, res) => {
   const settings = getSettingsMap();
 
   const courses = db.prepare(`
-    SELECT c.id, c.instructor_id, c.title, c.slug, c.category, c.level, c.duration_hours, c.price_pi,
-           c.syllabus_json, c.description, c.image_url, c.approval_status, c.is_featured,
+    SELECT c.id, c.instructor_id, c.title, c.slug, c.category, c.subject, c.language_code, c.issuing_organization,
+           c.level, c.duration_hours, c.price_pi, c.syllabus_json, c.description, c.image_url,
+           c.approval_status, c.is_featured, c.completeness_score,
            c.source_origin, c.source_url, c.availability_status, c.last_verified_at, c.created_at,
            u.full_name as instructor_name, i.headline as instructor_headline
     FROM courses c
     JOIN instructors i ON i.id = c.instructor_id
     JOIN users u ON u.id = i.user_id
-    WHERE c.approval_status = 'approved'
+    WHERE c.approval_status = 'approved' AND COALESCE(c.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected')
     ORDER BY c.is_featured DESC, c.created_at DESC
     LIMIT 6
   `).all();
 
   const businesses = db.prepare(`
-    SELECT b.id, b.owner_user_id, b.business_name, b.sector, b.country, b.website, b.summary, b.services_offered,
+    SELECT b.id, b.owner_user_id, b.business_name, b.sector, b.hub_category, b.country, b.website, b.summary, b.services_offered,
            b.verification_status, b.is_featured, b.source_origin, b.source_url, b.availability_status, b.last_verified_at, b.created_at,
            u.full_name as owner_name
     FROM business_profiles b
     JOIN users u ON u.id = b.owner_user_id
-    WHERE b.verification_status = 'verified'
+    WHERE b.verification_status = 'verified' AND COALESCE(b.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected')
     ORDER BY b.is_featured DESC, b.created_at DESC
     LIMIT 6
   `).all();
@@ -44,18 +49,20 @@ router.get('/public-summary', (_req, res) => {
     SELECT o.*, u.full_name as poster_name
     FROM opportunities o
     JOIN users u ON u.id = o.poster_user_id
-    WHERE o.approval_status = 'approved'
+    WHERE o.approval_status = 'approved' AND COALESCE(o.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected')
     ORDER BY o.created_at DESC
     LIMIT 6
   `).all();
 
   const products = db.prepare(`
-    SELECT p.id, p.seller_id, p.title, p.category, p.product_type, p.description, p.price_pi, p.stock_qty,
-           p.image_url, p.approval_status, p.source_origin, p.source_url, p.availability_status, p.last_verified_at, p.created_at,
+    SELECT p.id, p.seller_id, p.title, p.category, p.market_suite, p.product_type, p.description, p.price_pi, p.stock_qty,
+           p.image_url, p.approval_status, p.source_origin, p.source_url, p.distribution_permission,
+           p.delivery_method, p.refund_support_terms, p.availability_status, p.last_verified_at, p.created_at,
            s.store_name, s.country as seller_country, s.verification_status as seller_verified
     FROM products p
     JOIN sellers s ON s.id = p.seller_id
     WHERE p.approval_status = 'approved' AND s.verification_status = 'verified'
+      AND COALESCE(p.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected')
     ORDER BY p.created_at DESC
     LIMIT 6
   `).all();
@@ -64,7 +71,7 @@ router.get('/public-summary', (_req, res) => {
     SELECT fs.*, u.full_name as freelancer_name, u.country as freelancer_country
     FROM freelance_services fs
     JOIN users u ON u.id = fs.freelancer_user_id
-    WHERE fs.approval_status = 'approved'
+    WHERE fs.approval_status = 'approved' AND COALESCE(fs.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected')
     ORDER BY fs.created_at DESC
     LIMIT 6
   `).all();
@@ -73,7 +80,7 @@ router.get('/public-summary', (_req, res) => {
     SELECT cp.*, u.full_name as author_name, u.country as author_country
     FROM community_posts cp
     JOIN users u ON u.id = cp.author_user_id
-    WHERE cp.moderation_status = 'active'
+    WHERE cp.moderation_status = 'active' AND COALESCE(cp.moderation_action, '') NOT IN ('suspended', 'rejected')
     ORDER BY cp.created_at DESC
     LIMIT 6
   `).all();
@@ -171,31 +178,78 @@ router.get('/courses', optionalAuth, (req, res) => {
 
   const rows = db.prepare(`
     SELECT c.id, c.instructor_id, c.title, c.slug, c.category, c.subject, c.language_code, c.issuing_organization, c.school_id,
-           c.level, c.duration_hours, c.price_pi,
-           c.syllabus_json, c.description, c.image_url, c.approval_status, c.is_featured,
+           c.level, c.duration_hours, c.price_pi, c.syllabus_json, c.description, c.image_url, c.approval_status, c.is_featured,
+           c.learning_objectives_json, c.prerequisites, c.copyright_permission, c.certificate_criteria,
+           c.instructor_qualifications_snapshot, c.completeness_score, c.moderation_action, c.review_notes,
+           c.assignments_json, c.quizzes_json, c.slides_resources_json, c.modules_notes_json, c.media_lesson_url, c.exam_marking_guide,
+           c.locked_materials_enc,
            c.source_origin, c.source_url, c.availability_status, c.last_verified_at, c.created_at,
-           (CASE WHEN length(COALESCE(c.locked_materials_enc, '')) > 0 THEN 1 ELSE 0 END) as has_locked_content,
-           u.full_name as instructor_name, i.headline as instructor_headline, i.user_id as instructor_user_id,
+           (CASE WHEN length(COALESCE(c.locked_materials_enc, '')) > 0 OR c.price_pi > 0 THEN 1 ELSE 0 END) as has_locked_content,
+           u.full_name as instructor_name, i.headline as instructor_headline, i.credentials as instructor_credentials, i.user_id as instructor_user_id,
       (SELECT ROUND(AVG(r.rating), 1) FROM reviews r WHERE r.target_type = 'course' AND r.target_id = c.id AND r.moderation_status = 'approved') as avg_rating,
       (SELECT COUNT(*) FROM reviews r WHERE r.target_type = 'course' AND r.target_id = c.id AND r.moderation_status = 'approved') as review_count
     FROM courses c
     JOIN instructors i ON i.id = c.instructor_id
     JOIN users u ON u.id = i.user_id
-    WHERE c.approval_status = 'approved'
+    WHERE (c.approval_status = 'approved' AND COALESCE(c.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected'))
        OR (? IS NOT NULL AND i.user_id = ?)
     ORDER BY c.is_featured DESC, c.created_at DESC
   `).all(req.authUser?.id ?? null, req.authUser?.id ?? null) as Array<Record<string, unknown>>;
 
-  const filtered = rows.filter((row) => {
-    if (category && category !== 'All' && row.category !== category) return false;
-    if (subject && subject !== 'All' && row.subject !== subject && row.category !== subject) return false;
-    if (language && language !== 'all' && row.language_code !== language) return false;
-    if (q) {
-      const hay = `${row.title} ${row.description} ${row.category} ${row.subject || ''} ${row.instructor_name}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  const filtered = rows
+    .filter((row) => {
+      if (category && category !== 'All' && row.category !== category) return false;
+      if (subject && subject !== 'All' && row.subject !== subject && row.category !== subject) return false;
+      if (language && language !== 'all' && row.language_code !== language) return false;
+      if (q) {
+        const hay = `${row.title} ${row.description} ${row.category} ${row.subject || ''} ${row.instructor_name}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    })
+    .map((row) => {
+      const completeness = evaluateCourseCompleteness(row, { credentials: row.instructor_credentials });
+      const {
+        locked_materials_enc: _lm,
+        modules_notes_json: _mn,
+        slides_resources_json: _sr,
+        assignments_json: _as,
+        quizzes_json: _qz,
+        exam_marking_guide: _ex,
+        media_lesson_url: _mu,
+        ...publicSafe
+      } = row;
+      return {
+        ...publicSafe,
+        completeness_score: completeness.score,
+        completeness_total: completeness.total,
+        completeness_complete: completeness.complete,
+        module_topics_count: (() => {
+          try {
+            const parsed = JSON.parse(String(row.modules_notes_json || '[]'));
+            return Array.isArray(parsed) ? parsed.length : 0;
+          } catch {
+            return 0;
+          }
+        })(),
+        assignments_count: (() => {
+          try {
+            const parsed = JSON.parse(String(row.assignments_json || '[]'));
+            return Array.isArray(parsed) ? parsed.length : 0;
+          } catch {
+            return 0;
+          }
+        })(),
+        quizzes_count: (() => {
+          try {
+            const parsed = JSON.parse(String(row.quizzes_json || '[]'));
+            return Array.isArray(parsed) ? parsed.length : 0;
+          } catch {
+            return 0;
+          }
+        })(),
+      };
+    });
 
   res.json({ courses: filtered });
 });
@@ -241,23 +295,44 @@ router.post('/courses', requireAuth, (req, res) => {
   const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
   const syllabus = Array.isArray(req.body?.syllabus)
     ? req.body.syllabus.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
-    : ['Module 1: Core Foundations', 'Module 2: Applied Practice', 'Module 3: Capstone Assessment'];
+    : [];
+  const learningObjectives = Array.isArray(req.body?.learningObjectives)
+    ? req.body.learningObjectives.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
+    : [];
+  const modulesNotes = Array.isArray(req.body?.modulesNotes)
+    ? req.body.modulesNotes.slice(0, 30)
+    : [];
+  const slidesResources = Array.isArray(req.body?.slidesResources)
+    ? req.body.slidesResources.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 30)
+    : [];
+  const assignments = Array.isArray(req.body?.assignments)
+    ? req.body.assignments.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
+    : [];
+  const quizzes = Array.isArray(req.body?.quizzes)
+    ? req.body.quizzes.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
+    : [];
+  const examMarkingGuide = typeof req.body?.examMarkingGuide === 'string' ? req.body.examMarkingGuide.trim() : '';
+  const mediaLessonUrl = sanitizeHttpUrl(req.body?.mediaLessonUrl);
+  const instructorQualSnapshot = typeof req.body?.instructorQualifications === 'string' ? req.body.instructorQualifications.trim() : '';
+  const prerequisites = typeof req.body?.prerequisites === 'string' ? req.body.prerequisites.trim() : '';
+  const copyrightPermission = typeof req.body?.copyrightPermission === 'string' ? req.body.copyrightPermission.trim() : '';
+  const certificateCriteria = typeof req.body?.certificateCriteria === 'string' ? req.body.certificateCriteria.trim() : '';
 
   if (title.length < 5 || description.length < 20) {
     return res.status(400).json({ error: 'Course title and detailed description are required.' });
   }
 
-  let instructor = db.prepare(`SELECT id, approval_status FROM instructors WHERE user_id = ?`).get(req.authUser!.id) as
-    | { id: number; approval_status: string }
+  let instructor = db.prepare(`SELECT id, approval_status, credentials FROM instructors WHERE user_id = ?`).get(req.authUser!.id) as
+    | { id: number; approval_status: string; credentials: string }
     | undefined;
 
   const isAdmin = req.authUser!.roles.includes('super_admin');
   if (!instructor && isAdmin) {
     const insRes = db.prepare(`
-      INSERT INTO instructors (user_id, headline, bio, expertise, approval_status)
-      VALUES (?, 'IFIOK-EN Curriculum Lead', 'Official platform curriculum administrator.', ?, 'approved')
+      INSERT INTO instructors (user_id, headline, bio, expertise, credentials, approval_status)
+      VALUES (?, 'IFIOK-EN Curriculum Lead', 'Official platform curriculum administrator.', ?, 'Verified Platform Curriculum Authority', 'approved')
     `).run(req.authUser!.id, category);
-    instructor = { id: Number(insRes.lastInsertRowid), approval_status: 'approved' };
+    instructor = { id: Number(insRes.lastInsertRowid), approval_status: 'approved', credentials: 'Verified Platform Curriculum Authority' };
   }
 
   if (!instructor) {
@@ -268,7 +343,6 @@ router.post('/courses', requireAuth, (req, res) => {
   }
 
   const slug = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50)}-${crypto.randomBytes(3).toString('hex')}`;
-  const approvalStatus = isAdmin ? 'approved' : 'pending';
   const sourceOrigin = typeof req.body?.sourceOrigin === 'string' && req.body.sourceOrigin.trim()
     ? req.body.sourceOrigin.trim().slice(0, 120)
     : 'Authorized Educational Material';
@@ -281,12 +355,50 @@ router.post('/courses', requireAuth, (req, res) => {
     ? req.body.issuingOrganization.trim().slice(0, 120)
     : 'IFIOK SCHOOL';
 
+  const encryptedMaterials = encryptSensitive(lockedMaterials);
+  const completeness = evaluateCourseCompleteness(
+    {
+      title,
+      description,
+      syllabus_json: syllabus,
+      learning_objectives_json: learningObjectives,
+      modules_notes_json: modulesNotes,
+      media_lesson_url: mediaLessonUrl,
+      locked_materials_enc: encryptedMaterials,
+      slides_resources_json: slidesResources,
+      assignments_json: assignments,
+      quizzes_json: quizzes,
+      exam_marking_guide: examMarkingGuide,
+      instructor_qualifications_snapshot: instructorQualSnapshot || instructor.credentials,
+      duration_hours: durationHours,
+      level,
+      language_code: languageCode,
+      prerequisites,
+      copyright_permission: copyrightPermission,
+      certificate_criteria: certificateCriteria,
+    },
+    instructor
+  );
+
+  // Enforce 15-point curriculum completeness before approving any paid course
+  if (isAdmin && pricePi > 0 && !completeness.complete) {
+    return res.status(400).json({
+      error: `Paid course cannot be auto-approved until all 15 curriculum requirements are complete (${completeness.score}/15).`,
+      completeness,
+    });
+  }
+
+  const approvalStatus = isAdmin ? 'approved' : 'pending';
+
   const resIns = db.prepare(`
     INSERT INTO courses (
       instructor_id, title, slug, category, subject, language_code, issuing_organization,
       level, duration_hours, price_pi, syllabus_json, description,
+      learning_objectives_json, modules_notes_json, media_lesson_url, slides_resources_json,
+      assignments_json, quizzes_json, exam_marking_guide, instructor_qualifications_snapshot,
+      prerequisites, copyright_permission, certificate_criteria, completeness_score,
       image_url, approval_status, source_origin, source_url, availability_status, last_verified_at, locked_materials_enc
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)
   `).run(
     instructor.id,
     title,
@@ -300,16 +412,36 @@ router.post('/courses', requireAuth, (req, res) => {
     pricePi,
     JSON.stringify(syllabus),
     description,
+    JSON.stringify(learningObjectives),
+    JSON.stringify(modulesNotes),
+    mediaLessonUrl,
+    JSON.stringify(slidesResources),
+    JSON.stringify(assignments),
+    JSON.stringify(quizzes),
+    examMarkingGuide,
+    instructorQualSnapshot || instructor.credentials || '',
+    prerequisites,
+    copyrightPermission,
+    certificateCriteria,
+    completeness.score,
     imageUrl,
     approvalStatus,
     sourceOrigin,
     sourceUrl,
     isAdmin ? new Date().toISOString() : null,
-    encryptSensitive(lockedMaterials)
+    encryptedMaterials
   );
 
-  recordAudit(req.authUser!.id, 'course_created', 'course', Number(resIns.lastInsertRowid), req.ip || '', { approvalStatus, sourceOrigin });
-  return res.status(201).json({ id: Number(resIns.lastInsertRowid), approvalStatus });
+  recordAudit(req.authUser!.id, 'course_created', 'course', Number(resIns.lastInsertRowid), req.ip || '', {
+    approvalStatus,
+    sourceOrigin,
+    completenessScore: completeness.score,
+  });
+  return res.status(201).json({
+    id: Number(resIns.lastInsertRowid),
+    approvalStatus,
+    completeness,
+  });
 });
 
 router.get('/courses/:id/classroom', requireAuth, async (req, res) => {
@@ -317,33 +449,23 @@ router.get('/courses/:id/classroom', requireAuth, async (req, res) => {
   const course = db.prepare(`
     SELECT c.id, c.title, c.category, c.subject, c.language_code, c.issuing_organization, c.level, c.duration_hours,
            c.price_pi, c.syllabus_json, c.description, c.image_url, c.approval_status, c.locked_materials_enc,
-           u.full_name as instructor_name, i.user_id as instructor_user_id
+           c.learning_objectives_json, c.modules_notes_json, c.media_lesson_url, c.slides_resources_json,
+           c.assignments_json, c.quizzes_json, c.exam_marking_guide, c.instructor_qualifications_snapshot,
+           c.prerequisites, c.copyright_permission, c.certificate_criteria, c.completeness_score,
+           c.moderation_action, c.review_notes,
+           u.full_name as instructor_name, i.credentials as instructor_credentials, i.user_id as instructor_user_id
     FROM courses c
     JOIN instructors i ON i.id = c.instructor_id
     JOIN users u ON u.id = i.user_id
     WHERE c.id = ?
-  `).get(courseId) as
-    | {
-        id: number;
-        title: string;
-        category: string;
-        subject: string;
-        language_code: string;
-        issuing_organization: string;
-        level: string;
-        duration_hours: number;
-        price_pi: number;
-        syllabus_json: string;
-        description: string;
-        image_url: string;
-        approval_status: string;
-        locked_materials_enc: string;
-        instructor_name: string;
-        instructor_user_id: number;
-      }
-    | undefined;
+  `).get(courseId) as Record<string, unknown> | undefined;
 
-  if (!course || (course.approval_status !== 'approved' && course.instructor_user_id !== req.authUser!.id)) {
+  if (
+    !course ||
+    ((course.approval_status !== 'approved' || ['suspended', 'correction_requested', 'rejected'].includes(String(course.moderation_action || ''))) &&
+      course.instructor_user_id !== req.authUser!.id &&
+      !req.authUser!.roles.includes('super_admin'))
+  ) {
     return res.status(404).json({ error: 'Approved course not found.' });
   }
 
@@ -364,11 +486,41 @@ router.get('/courses/:id/classroom', requireAuth, async (req, res) => {
 
   const unlocked = Boolean(isFree || isOwnerOrAdmin || ent?.is_unlocked === 1);
   const { decryptSensitive } = await import('../lib/crypto.ts');
-  const materials = unlocked && course.locked_materials_enc ? decryptSensitive(course.locked_materials_enc) : null;
+  const materials = unlocked && course.locked_materials_enc ? decryptSensitive(String(course.locked_materials_enc)) : null;
+  const completeness = evaluateCourseCompleteness(course, { credentials: course.instructor_credentials });
 
-  const { locked_materials_enc: _omit, ...safeCourse } = course;
+  const {
+    locked_materials_enc: _omit,
+    modules_notes_json,
+    slides_resources_json,
+    assignments_json,
+    quizzes_json,
+    exam_marking_guide,
+    media_lesson_url,
+    ...publicCourse
+  } = course;
+
   return res.json({
-    course: safeCourse,
+    course: unlocked
+      ? {
+          ...publicCourse,
+          modules_notes_json,
+          slides_resources_json,
+          assignments_json,
+          quizzes_json,
+          exam_marking_guide,
+          media_lesson_url,
+        }
+      : {
+          ...publicCourse,
+          modules_notes_json: '[]',
+          slides_resources_json: '[]',
+          assignments_json: '[]',
+          quizzes_json: '[]',
+          exam_marking_guide: '',
+          media_lesson_url: '',
+        },
+    completeness,
     enrolment: enrolment || null,
     unlocked,
     materials,
@@ -463,23 +615,25 @@ router.get('/certificates/verify/:code', (req, res) => {
 // ================= BUSINESS HUB =================
 router.get('/businesses', (req, res) => {
   const sector = typeof req.query.sector === 'string' ? req.query.sector.trim() : '';
+  const hubCategory = typeof req.query.hubCategory === 'string' ? req.query.hubCategory.trim() : '';
   const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
 
   const rows = db.prepare(`
-    SELECT b.id, b.owner_user_id, b.business_name, b.registration_number, b.sector, b.country, b.website,
+    SELECT b.id, b.owner_user_id, b.business_name, b.registration_number, b.sector, b.hub_category, b.country, b.website,
            b.summary, b.services_offered, b.verification_status, b.is_featured,
            b.source_origin, b.source_url, b.availability_status, b.last_verified_at, b.created_at,
            u.full_name as owner_name
     FROM business_profiles b
     JOIN users u ON u.id = b.owner_user_id
-    WHERE b.verification_status = 'verified'
+    WHERE b.verification_status = 'verified' AND COALESCE(b.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected')
     ORDER BY b.is_featured DESC, b.created_at DESC
   `).all() as Array<Record<string, unknown>>;
 
   const filtered = rows.filter((b) => {
     if (sector && sector !== 'All' && b.sector !== sector) return false;
+    if (hubCategory && hubCategory !== 'All' && b.hub_category !== hubCategory) return false;
     if (q) {
-      const hay = `${b.business_name} ${b.sector} ${b.country} ${b.summary} ${b.services_offered}`.toLowerCase();
+      const hay = `${b.business_name} ${b.sector} ${b.hub_category || ''} ${b.country} ${b.summary} ${b.services_offered}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -492,6 +646,7 @@ router.post('/businesses', requireAuth, (req, res) => {
   const businessName = typeof req.body?.businessName === 'string' ? req.body.businessName.trim() : '';
   const registrationNumber = typeof req.body?.registrationNumber === 'string' ? req.body.registrationNumber.trim() : '';
   const sector = typeof req.body?.sector === 'string' ? req.body.sector.trim() : '';
+  const hubCategory = typeof req.body?.hubCategory === 'string' && req.body.hubCategory.trim() ? req.body.hubCategory.trim() : 'Verified SMEs';
   const country = typeof req.body?.country === 'string' ? req.body.country.trim() : '';
   const website = sanitizeHttpUrl(req.body?.website);
   const summary = typeof req.body?.summary === 'string' ? req.body.summary.trim() : '';
@@ -511,15 +666,16 @@ router.post('/businesses', requireAuth, (req, res) => {
 
   const ins = db.prepare(`
     INSERT INTO business_profiles (
-      owner_user_id, business_name, registration_number, registration_number_enc, sector, country, website,
+      owner_user_id, business_name, registration_number, registration_number_enc, sector, hub_category, country, website,
       summary, services_offered, verification_status, source_origin, source_url, availability_status, last_verified_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
   `).run(
     req.authUser!.id,
     businessName,
     maskedReg,
     encryptSensitive(registrationNumber),
     sector,
+    hubCategory,
     country,
     website,
     summary,
@@ -531,7 +687,7 @@ router.post('/businesses', requireAuth, (req, res) => {
   );
 
   assignRole(req.authUser!.id, 'organisation', req.authUser!.id);
-  recordAudit(req.authUser!.id, 'business_submitted', 'business_profile', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin });
+  recordAudit(req.authUser!.id, 'business_submitted', 'business_profile', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin, hubCategory });
 
   return res.status(201).json({ id: Number(ins.lastInsertRowid), verificationStatus: status });
 });
@@ -545,14 +701,22 @@ router.get('/services', optionalAuth, (req, res) => {
     SELECT fs.*, u.full_name as freelancer_name, u.country as freelancer_country
     FROM freelance_services fs
     JOIN users u ON u.id = fs.freelancer_user_id
-    WHERE fs.approval_status = 'approved' OR (? IS NOT NULL AND fs.freelancer_user_id = ?)
+    WHERE (fs.approval_status = 'approved' AND COALESCE(fs.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected'))
+       OR (? IS NOT NULL AND fs.freelancer_user_id = ?)
     ORDER BY fs.created_at DESC
   `).all(req.authUser?.id ?? null, req.authUser?.id ?? null) as Array<Record<string, unknown>>;
 
   const filtered = rows.filter((s) => {
-    if (category && category !== 'All' && s.category !== category) return false;
+    if (category && category !== 'All') {
+      const cat = String(s.category || '');
+      const matchesExact = cat === category;
+      const matchesLegacy =
+        (category === 'Programming' && cat === 'Software Development') ||
+        ((category === 'Writing' || category === 'Translation') && cat === 'Writing & Translation');
+      if (!matchesExact && !matchesLegacy) return false;
+    }
     if (q) {
-      const hay = `${s.title} ${s.category} ${s.description} ${s.freelancer_name}`.toLowerCase();
+      const hay = `${s.title} ${s.category} ${s.description} ${s.deliverables || ''} ${s.freelancer_name}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -563,8 +727,10 @@ router.get('/services', optionalAuth, (req, res) => {
 
 router.post('/services', requireAuth, (req, res) => {
   const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
-  const category = typeof req.body?.category === 'string' ? req.body.category.trim() : 'Software Development';
+  const category = typeof req.body?.category === 'string' && req.body.category.trim() ? req.body.category.trim() : 'Programming';
   const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+  const deliverables = typeof req.body?.deliverables === 'string' ? req.body.deliverables.trim() : '';
+  const credentialsSummary = typeof req.body?.credentialsSummary === 'string' ? req.body.credentialsSummary.trim() : '';
   const deliveryDays = Math.max(1, Math.min(180, Number(req.body?.deliveryDays) || 7));
   const pricePi = Math.max(1, Number(req.body?.pricePi) || 0);
 
@@ -580,10 +746,22 @@ router.post('/services', requireAuth, (req, res) => {
 
   const ins = db.prepare(`
     INSERT INTO freelance_services (
-      freelancer_user_id, title, category, description, delivery_days, price_pi, approval_status,
-      source_origin, availability_status, last_verified_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
-  `).run(req.authUser!.id, title, category, description, deliveryDays, pricePi, status, sourceOrigin, isAdmin ? new Date().toISOString() : null);
+      freelancer_user_id, title, category, description, deliverables, credentials_summary,
+      delivery_days, price_pi, approval_status, source_origin, availability_status, last_verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
+  `).run(
+    req.authUser!.id,
+    title,
+    category,
+    description,
+    deliverables,
+    credentialsSummary,
+    deliveryDays,
+    pricePi,
+    status,
+    sourceOrigin,
+    isAdmin ? new Date().toISOString() : null
+  );
 
   assignRole(req.authUser!.id, 'freelancer', req.authUser!.id);
   recordAudit(req.authUser!.id, 'freelance_service_created', 'freelance_service', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin });
@@ -635,14 +813,14 @@ router.get('/opportunities', (req, res) => {
     SELECT o.*, u.full_name as poster_name
     FROM opportunities o
     JOIN users u ON u.id = o.poster_user_id
-    WHERE o.approval_status = 'approved'
+    WHERE o.approval_status = 'approved' AND COALESCE(o.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected')
     ORDER BY o.created_at DESC
   `).all() as Array<Record<string, unknown>>;
 
   const filtered = rows.filter((o) => {
     if (oppType && oppType !== 'all' && o.opportunity_type !== oppType) return false;
     if (q) {
-      const hay = `${o.title} ${o.organization_name} ${o.location} ${o.description}`.toLowerCase();
+      const hay = `${o.title} ${o.organization_name} ${o.location} ${o.description} ${o.eligibility || ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -652,8 +830,9 @@ router.get('/opportunities', (req, res) => {
 });
 
 router.post('/opportunities', requireAuth, (req, res) => {
+  const allowedOppTypes = ['job', 'internship', 'scholarship', 'grant', 'fellowship', 'competition', 'partnership'];
   const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
-  const opportunityType = typeof req.body?.opportunityType === 'string' ? req.body.opportunityType.trim() : 'job';
+  const opportunityType = allowedOppTypes.includes(req.body?.opportunityType) ? req.body.opportunityType : 'job';
   const organizationName = typeof req.body?.organizationName === 'string' ? req.body.organizationName.trim() : '';
   const location = typeof req.body?.location === 'string' ? req.body.location.trim() : 'Remote';
   const isRemote = req.body?.isRemote ? 1 : 0;
@@ -661,6 +840,7 @@ router.post('/opportunities', requireAuth, (req, res) => {
   const deadline = typeof req.body?.deadline === 'string' ? req.body.deadline.trim() : '';
   const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
   const requirements = typeof req.body?.requirements === 'string' ? req.body.requirements.trim() : '';
+  const eligibility = typeof req.body?.eligibility === 'string' ? req.body.eligibility.trim() : '';
   const externalUrl = typeof req.body?.externalUrl === 'string' ? req.body.externalUrl.trim() : '';
 
   if (title.length < 5 || organizationName.length < 2 || description.length < 20 || !deadline) {
@@ -677,9 +857,9 @@ router.post('/opportunities', requireAuth, (req, res) => {
   const ins = db.prepare(`
     INSERT INTO opportunities (
       poster_user_id, title, opportunity_type, organization_name, location, is_remote,
-      compensation_or_award, deadline, description, requirements, external_url, approval_status,
+      compensation_or_award, deadline, description, requirements, eligibility, external_url, approval_status,
       source_origin, source_url, availability_status, last_verified_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)
   `).run(
     req.authUser!.id,
     title,
@@ -691,6 +871,7 @@ router.post('/opportunities', requireAuth, (req, res) => {
     deadline,
     description,
     requirements,
+    eligibility,
     sanitizeHttpUrl(externalUrl),
     status,
     sourceOrigin,
@@ -742,27 +923,31 @@ router.post('/opportunities/:id/apply', requireAuth, (req, res) => {
 router.get('/products', optionalAuth, (req, res) => {
   const productType = typeof req.query.type === 'string' ? req.query.type.trim() : '';
   const category = typeof req.query.category === 'string' ? req.query.category.trim() : '';
+  const marketSuite = typeof req.query.suite === 'string' ? req.query.suite.trim() : '';
   const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
 
   const rows = db.prepare(`
-    SELECT p.id, p.seller_id, p.title, p.category, p.product_type, p.description, p.price_pi, p.stock_qty,
-           p.image_url, p.approval_status, p.source_origin, p.source_url, p.availability_status, p.last_verified_at, p.created_at,
-           (CASE WHEN length(COALESCE(p.locked_content_enc, '')) > 0 THEN 1 ELSE 0 END) as has_locked_content,
+    SELECT p.id, p.seller_id, p.title, p.category, p.market_suite, p.product_type, p.description, p.price_pi, p.stock_qty,
+           p.image_url, p.approval_status, p.source_origin, p.source_url, p.distribution_permission,
+           p.delivery_method, p.refund_support_terms, p.availability_status, p.last_verified_at,
+           p.moderation_action, p.review_notes, p.created_at,
+           (CASE WHEN length(COALESCE(p.locked_content_enc, '')) > 0 OR p.product_type != 'physical' THEN 1 ELSE 0 END) as has_locked_content,
            s.store_name, s.country as seller_country, s.user_id as seller_user_id,
       (SELECT ROUND(AVG(r.rating), 1) FROM reviews r WHERE r.target_type = 'product' AND r.target_id = p.id AND r.moderation_status = 'approved') as avg_rating,
       (SELECT COUNT(*) FROM reviews r WHERE r.target_type = 'product' AND r.target_id = p.id AND r.moderation_status = 'approved') as review_count
     FROM products p
     JOIN sellers s ON s.id = p.seller_id
-    WHERE (p.approval_status = 'approved' AND s.verification_status = 'verified')
+    WHERE (p.approval_status = 'approved' AND s.verification_status = 'verified' AND COALESCE(p.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected'))
        OR (? IS NOT NULL AND s.user_id = ?)
     ORDER BY p.created_at DESC
   `).all(req.authUser?.id ?? null, req.authUser?.id ?? null) as Array<Record<string, unknown>>;
 
   const filtered = rows.filter((p) => {
     if (productType && productType !== 'all' && p.product_type !== productType) return false;
+    if (marketSuite && marketSuite !== 'all' && p.market_suite !== marketSuite) return false;
     if (category && category !== 'All' && p.category !== category) return false;
     if (q) {
-      const hay = `${p.title} ${p.description} ${p.category} ${p.store_name}`.toLowerCase();
+      const hay = `${p.title} ${p.description} ${p.category} ${p.market_suite || ''} ${p.store_name}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -801,8 +986,15 @@ router.post('/sellers/apply', requireAuth, (req, res) => {
 
 router.post('/products', requireAuth, (req, res) => {
   const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
-  const category = typeof req.body?.category === 'string' ? req.body.category.trim() : 'Digital Products';
-  const productType = typeof req.body?.productType === 'string' ? req.body.productType.trim() : 'digital';
+  const category = typeof req.body?.category === 'string' ? req.body.category.trim() : 'Software & Licenses';
+  const marketSuite = typeof req.body?.marketSuite === 'string' && (MARKET_SUITE_IDS as readonly string[]).includes(req.body.marketSuite)
+    ? req.body.marketSuite
+    : req.body?.productType === 'physical'
+      ? 'physical_commerce'
+      : 'software_productivity';
+  const productType = ['physical', 'digital', 'service', 'web3', 'pi_app', 'gaming_asset'].includes(req.body?.productType)
+    ? req.body.productType
+    : 'digital';
   const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
   const pricePi = Number(req.body?.pricePi);
   const stockQty = Math.max(0, Number(req.body?.stockQty) || 1);
@@ -810,11 +1002,21 @@ router.post('/products', requireAuth, (req, res) => {
     ? req.body.sourceOrigin.trim().slice(0, 120)
     : 'Seller Submission';
   const sourceUrl = sanitizeHttpUrl(req.body?.sourceUrl);
+  const distributionPermission = typeof req.body?.distributionPermission === 'string' ? req.body.distributionPermission.trim().slice(0, 240) : '';
+  const deliveryMethod = typeof req.body?.deliveryMethod === 'string' && req.body.deliveryMethod.trim()
+    ? req.body.deliveryMethod.trim().slice(0, 80)
+    : productType === 'physical'
+      ? 'physical_shipping'
+      : 'instant_digital_download';
+  const refundSupportTerms = typeof req.body?.refundSupportTerms === 'string' ? req.body.refundSupportTerms.trim().slice(0, 300) : '';
   const imageUrl = sanitizeHttpUrl(req.body?.imageUrl) || (typeof req.body?.imageUrl === 'string' && req.body.imageUrl.startsWith('/api/uploads/') ? req.body.imageUrl : '');
   const lockedContent = typeof req.body?.lockedContent === 'string' ? req.body.lockedContent.trim() : '';
 
   if (title.length < 3 || description.length < 15 || !Number.isFinite(pricePi) || pricePi <= 0) {
     return res.status(400).json({ error: 'Valid product title, description, and price (> 0 PI) are required.' });
+  }
+  if (distributionPermission.length < 5 || refundSupportTerms.length < 8) {
+    return res.status(400).json({ error: 'Ownership/distribution permission and explicit refund/support terms are required for every marketplace listing.' });
   }
 
   const isAdmin = req.authUser!.roles.includes('super_admin');
@@ -841,13 +1043,15 @@ router.post('/products', requireAuth, (req, res) => {
   const availability = stockQty > 0 ? 'available' : 'out_of_stock';
   const ins = db.prepare(`
     INSERT INTO products (
-      seller_id, title, category, product_type, description, price_pi, stock_qty,
-      image_url, approval_status, source_origin, source_url, availability_status, last_verified_at, locked_content_enc
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      seller_id, title, category, market_suite, product_type, description, price_pi, stock_qty,
+      image_url, approval_status, source_origin, source_url, distribution_permission,
+      delivery_method, refund_support_terms, availability_status, last_verified_at, locked_content_enc
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     seller.id,
     title,
     category,
+    marketSuite,
     productType,
     description,
     pricePi,
@@ -856,12 +1060,15 @@ router.post('/products', requireAuth, (req, res) => {
     status,
     sourceOrigin,
     sourceUrl,
+    distributionPermission,
+    deliveryMethod,
+    refundSupportTerms,
     availability,
     isAdmin ? new Date().toISOString() : null,
     encryptSensitive(lockedContent)
   );
 
-  recordAudit(req.authUser!.id, 'product_created', 'product', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin });
+  recordAudit(req.authUser!.id, 'product_created', 'product', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin, marketSuite });
   return res.status(201).json({ id: Number(ins.lastInsertRowid), approvalStatus: status });
 });
 
@@ -919,19 +1126,21 @@ router.get('/community', (req, res) => {
 });
 
 router.post('/community/posts', requireAuth, (req, res) => {
-  const groupName = typeof req.body?.groupName === 'string' && req.body.groupName.trim() ? req.body.groupName.trim() : 'Global Builders';
+  const groupName = typeof req.body?.groupName === 'string' && req.body.groupName.trim() ? req.body.groupName.trim() : 'Professional Networking';
   const postType = ['discussion', 'announcement', 'collaboration'].includes(req.body?.postType) ? req.body.postType : 'discussion';
   const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
   const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+  const eventDate = typeof req.body?.eventDate === 'string' ? req.body.eventDate.trim().slice(0, 60) : '';
+  const eventLocation = typeof req.body?.eventLocation === 'string' ? req.body.eventLocation.trim().slice(0, 120) : '';
 
   if (title.length < 4 || body.length < 15) {
     return res.status(400).json({ error: 'Post title and meaningful message body are required.' });
   }
 
   const ins = db.prepare(`
-    INSERT INTO community_posts (author_user_id, group_name, post_type, title, body)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(req.authUser!.id, groupName, postType, title, body);
+    INSERT INTO community_posts (author_user_id, group_name, post_type, title, body, event_date, event_location)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(req.authUser!.id, groupName, postType, title, body, eventDate, eventLocation);
 
   recordAudit(req.authUser!.id, 'community_post_created', 'community_post', Number(ins.lastInsertRowid), req.ip || '', { groupName, postType });
   return res.status(201).json({ id: Number(ins.lastInsertRowid) });

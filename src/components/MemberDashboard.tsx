@@ -947,6 +947,70 @@ export function MemberDashboard({
                   </div>
                 )}
 
+                {/* My Submitted Courses & Instructor Status */}
+                {(data.instructorProfile || data.myCourses.length > 0) && (
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="font-display font-bold text-base text-slate-950 dark:text-white">
+                          My Submitted IFIOK SCHOOL Courses & Instructor Status
+                        </h3>
+                        {data.instructorProfile && (
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Instructor Status:{' '}
+                            <span className="font-mono uppercase">{String(data.instructorProfile.approval_status)}</span>
+                            {typeof data.instructorProfile.moderation_action === 'string' &&
+                            data.instructorProfile.moderation_action
+                              ? ` · Action: ${data.instructorProfile.moderation_action}`
+                              : ''}
+                            {typeof data.instructorProfile.review_notes === 'string' &&
+                            data.instructorProfile.review_notes
+                              ? ` · Notes: ${data.instructorProfile.review_notes}`
+                              : ''}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onOpenDivision('academy', 'courses')}
+                        className="text-xs font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+                      >
+                        Submit / Edit Courses
+                      </button>
+                    </div>
+                    {data.myCourses.length === 0 ? (
+                      <p className="text-xs text-slate-500">No courses submitted yet.</p>
+                    ) : (
+                      <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg">
+                        {data.myCourses.map((c) => (
+                          <div key={String(c.id)} className="p-3.5 flex flex-wrap items-start justify-between gap-3 text-xs">
+                            <div className="space-y-1">
+                              <div className="font-semibold text-sm text-slate-900 dark:text-white">{String(c.title)}</div>
+                              <div className="text-slate-500">
+                                {String(c.category)} · {String(c.price_pi)} π · Curriculum:{' '}
+                                <span className="font-mono font-semibold">
+                                  {String(c.completeness_score ?? 0)}/15
+                                </span>
+                              </div>
+                              {typeof c.review_notes === 'string' && c.review_notes && (
+                                <p className="text-amber-700 dark:text-amber-300">
+                                  Reviewer Note: {c.review_notes}
+                                </p>
+                              )}
+                            </div>
+                            <span className="font-mono uppercase text-slate-700 dark:text-amber-400">
+                              {String(c.approval_status)}
+                              {typeof c.moderation_action === 'string' && c.moderation_action
+                                ? ` · ${c.moderation_action}`
+                                : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Institutional & Teacher/Student School Portal Embedded Directly */}
                 <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
                   <SchoolManagementPortal
@@ -987,15 +1051,23 @@ export function MemberDashboard({
                 ) : (
                   <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-[#0D152B]">
                     {data.businesses.map((b) => (
-                      <div key={String(b.id)} className="p-4 flex items-center justify-between gap-4">
-                        <div>
+                      <div key={String(b.id)} className="p-4 flex flex-wrap items-start justify-between gap-4">
+                        <div className="space-y-1">
                           <div className="font-semibold text-sm">{String(b.business_name)}</div>
                           <div className="text-xs text-slate-500">
-                            {String(b.sector)} · {String(b.country)}
+                            {String(b.hub_category || b.sector)} · {String(b.sector)} · {String(b.country)}
                           </div>
+                          {typeof b.review_notes === 'string' && b.review_notes && (
+                            <p className="text-xs text-amber-700 dark:text-amber-300">
+                              Reviewer Note: {b.review_notes}
+                            </p>
+                          )}
                         </div>
                         <span className="font-mono text-xs uppercase text-slate-700 dark:text-amber-400">
                           {String(b.verification_status)}
+                          {typeof b.moderation_action === 'string' && b.moderation_action
+                            ? ` · ${b.moderation_action}`
+                            : ''}
                         </span>
                       </div>
                     ))}
@@ -1057,6 +1129,36 @@ export function MemberDashboard({
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+                {data.myServices.length > 0 && (
+                  <div className="space-y-3 pt-4 border-t border-slate-200 dark:border-slate-800">
+                    <h3 className="font-display font-bold text-base text-slate-950 dark:text-white">
+                      My Published Freelance Services
+                    </h3>
+                    <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-[#0D152B]">
+                      {data.myServices.map((sv) => (
+                        <div key={String(sv.id)} className="p-4 flex flex-wrap items-start justify-between gap-3 text-xs">
+                          <div className="space-y-1">
+                            <div className="font-semibold text-sm text-slate-950 dark:text-white">{String(sv.title)}</div>
+                            <div className="text-slate-500">
+                              {String(sv.category)} · <span className="font-mono">{String(sv.price_pi)} π</span>
+                            </div>
+                            {typeof sv.review_notes === 'string' && sv.review_notes && (
+                              <p className="text-amber-700 dark:text-amber-300">
+                                Reviewer Note: {sv.review_notes}
+                              </p>
+                            )}
+                          </div>
+                          <span className="font-mono uppercase text-slate-700 dark:text-amber-400">
+                            {String(sv.approval_status)}
+                            {typeof sv.moderation_action === 'string' && sv.moderation_action
+                              ? ` · ${sv.moderation_action}`
+                              : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1167,6 +1269,61 @@ export function MemberDashboard({
                         </tbody>
                       </table>
                     </div>
+                  </div>
+                )}
+                {(data.sellerProfile || data.myProducts.length > 0) && (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                          My Marketplace Storefront & Submitted Listings
+                        </h2>
+                        {data.sellerProfile && (
+                          <p className="text-xs text-slate-500">
+                            Storefront: {String(data.sellerProfile.store_name)} · Status:{' '}
+                            <span className="font-mono uppercase">{String(data.sellerProfile.verification_status)}</span>
+                            {typeof data.sellerProfile.review_notes === 'string' && data.sellerProfile.review_notes
+                              ? ` · Note: ${data.sellerProfile.review_notes}`
+                              : ''}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onOpenDivision('market')}
+                        className="text-xs font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
+                      >
+                        Manage in IFIOK Market
+                      </button>
+                    </div>
+                    {data.myProducts.length === 0 ? (
+                      <p className="text-xs text-slate-500">No marketplace products submitted yet.</p>
+                    ) : (
+                      <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-[#0D152B]">
+                        {data.myProducts.map((p) => (
+                          <div key={String(p.id)} className="p-4 flex flex-wrap items-start justify-between gap-3 text-xs">
+                            <div className="space-y-1">
+                              <div className="font-semibold text-sm text-slate-950 dark:text-white">{String(p.title)}</div>
+                              <div className="text-slate-500">
+                                {String(p.market_suite || p.category)} · <span className="font-mono">{String(p.price_pi)} π</span> · Availability:{' '}
+                                <span className="font-mono uppercase">{String(p.availability_status || 'available')}</span>
+                              </div>
+                              {typeof p.review_notes === 'string' && p.review_notes && (
+                                <p className="text-amber-700 dark:text-amber-300">
+                                  Reviewer Note: {p.review_notes}
+                                </p>
+                              )}
+                            </div>
+                            <span className="font-mono uppercase text-slate-700 dark:text-amber-400">
+                              {String(p.approval_status)}
+                              {typeof p.moderation_action === 'string' && p.moderation_action
+                                ? ` · ${p.moderation_action}`
+                                : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

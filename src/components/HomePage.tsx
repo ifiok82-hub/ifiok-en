@@ -22,7 +22,7 @@ import communityImg from '../assets/images/community_summit_collab_1794641802970
 import heroImg from '../assets/images/hero_global_network_1794641803186.jpg';
 import marketImg from '../assets/images/market_digital_commerce_1794641803851.jpg';
 import { apiRequest } from '../lib/api.ts';
-import { formatPiPrice, LANGUAGE_OPTIONS, TRANSLATIONS } from '../lib/i18n.ts';
+import { formatPiPrice, getLanguageAvailabilitySummary, LANGUAGE_OPTIONS, TRANSLATIONS } from '../lib/i18n.ts';
 import type { PiAuthSession } from '../lib/pi.ts';
 import type {
   AcademySubView,
@@ -460,7 +460,7 @@ export function HomePage({
                   Learn Without Borders. Grow Without Limits.
                 </h3>
                 <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                  Serving individual students worldwide, primary & secondary schools, colleges, training institutions, independent educators, and adult lifelong learners across 17 subjects and 15 languages with IFIOK Professor AI.
+                  Serving individual students worldwide, primary & secondary schools, colleges, training institutions, independent educators, and adult lifelong learners across 17 subjects and {getLanguageAvailabilitySummary().fullUiLanguagesCount} verified languages with IFIOK Professor AI.
                 </p>
               </div>
               <div className="space-y-3">
@@ -576,10 +576,10 @@ export function HomePage({
                 <span>04. IFIOK Opportunities</span>
               </div>
               <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
-                Vetted jobs, scholarships, grants & internships
+                Vetted jobs, scholarships, grants, fellowships & competitions
               </h3>
               <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                Every listing undergoes administrator verification before publication, with direct application tracking in your dashboard.
+                Every listing undergoes administrator verification before publication, with clear eligibility and direct application tracking in your dashboard.
               </p>
             </div>
             <button
@@ -608,10 +608,10 @@ export function HomePage({
                   <span>05. IFIOK Market</span>
                 </div>
                 <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
-                  Physical, digital, Web3 & Pi ecosystem commerce
+                  Software, digital publishing, design, Web3 & Pi commerce
                 </h3>
                 <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                  Verified sellers offering real products, digital tools, Pi apps, and gaming assets settled in Pi.
+                  Digital Suites A–F and verified physical goods from vetted sellers with distribution rights, refund terms, and Pi-locked fulfillment.
                 </p>
               </div>
               <button

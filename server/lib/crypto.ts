@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 
 const dataDir = path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
@@ -248,20 +249,157 @@ export function detectSafeDigitalFile(
   return null;
 }
 
-export function extractReadableDocumentText(buf: Buffer, ext: string): string {
-  const cleanExt = ext.toLowerCase().replace(/^\./, '');
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_m, n) => {
+      const code = Number(n);
+      return Number.isFinite(code) && code >= 32 && code < 65535 ? String.fromCharCode(code) : ' ';
+    });
+}
+
+function extractZipTextEntries(buf: Buffer, entryPattern: RegExp): Array<{ name: string; text: string }> {
+  // Locate End of Central Directory (PK\x05\x06) scanning backwards from tail
+  let eocdOffset = -1;
+  const minOffset = Math.max(0, buf.length - 65557);
+  for (let i = buf.length - 22; i >= minOffset; i--) {
+    if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x05 && buf[i + 3] === 0x06) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset < 0) return [];
+
+  const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+  const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+  if (cdOffset >= buf.length || totalEntries > 1000) return [];
+
+  const results: Array<{ name: string; text: string }> = [];
+  let cursor = cdOffset;
+  let totalDecompressed = 0;
+
+  for (let idx = 0; idx < totalEntries && cursor + 46 <= eocdOffset; idx++) {
+    if (buf.readUInt32LE(cursor) !== 0x02014b50) break;
+    const compressionMethod = buf.readUInt16LE(cursor + 10);
+    const compressedSize = buf.readUInt32LE(cursor + 20);
+    const uncompressedSize = buf.readUInt32LE(cursor + 24);
+    const fileNameLen = buf.readUInt16LE(cursor + 28);
+    const extraLen = buf.readUInt16LE(cursor + 30);
+    const commentLen = buf.readUInt16LE(cursor + 32);
+    const localHeaderOffset = buf.readUInt32LE(cursor + 42);
+    const name = buf.subarray(cursor + 46, cursor + 46 + fileNameLen).toString('utf8');
+    cursor += 46 + fileNameLen + extraLen + commentLen;
+
+    if (!entryPattern.test(name)) continue;
+    if (uncompressedSize > 512 * 1024 || totalDecompressed + uncompressedSize > 2 * 1024 * 1024) continue;
+    if (localHeaderOffset + 30 > buf.length || buf.readUInt32LE(localHeaderOffset) !== 0x04034b50) continue;
+
+    const lfhNameLen = buf.readUInt16LE(localHeaderOffset + 26);
+    const lfhExtraLen = buf.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + lfhNameLen + lfhExtraLen;
+    if (dataStart + compressedSize > buf.length) continue;
+
+    const rawSlice = buf.subarray(dataStart, dataStart + compressedSize);
+    try {
+      let inflated: Buffer;
+      if (compressionMethod === 0) {
+        inflated = rawSlice;
+      } else if (compressionMethod === 8) {
+        inflated = zlib.inflateRawSync(rawSlice, { maxOutputLength: 512 * 1024 });
+      } else {
+        continue;
+      }
+      totalDecompressed += inflated.length;
+      results.push({ name, text: inflated.toString('utf8') });
+      if (results.length >= 40) break;
+    } catch {
+      // Ignore malformed zip entry
+    }
+  }
+
+  return results;
+}
+
+export function extractReadableDocumentText(buf: Buffer, extOrName: string): string {
+  const trimmed = String(extOrName || '').trim().toLowerCase();
+  const extPart = trimmed.includes('.') ? path.extname(trimmed) || trimmed : trimmed;
+  const cleanExt = extPart.replace(/^\./, '');
   if (['txt', 'md', 'csv'].includes(cleanExt)) {
     return buf.toString('utf8').replace(/\r\n/g, '\n').trim();
   }
+  if (cleanExt === 'docx') {
+    const entries = extractZipTextEntries(buf, /^word\/(document|header\d+|footer\d+)\.xml$/i);
+    const docEntry = entries.find((e) => e.name.toLowerCase() === 'word/document.xml');
+    const ordered = docEntry ? [docEntry, ...entries.filter((e) => e !== docEntry)] : entries;
+    const text = ordered
+      .map((entry) =>
+        decodeXmlEntities(
+          entry.text
+            .replace(/<\/w:p>/g, '\n')
+            .replace(/<w:br[^>]*\/>/g, '\n')
+            .replace(/<w:tab[^>]*\/>/g, ' ')
+            .replace(/<[^>]+>/g, '')
+        )
+      )
+      .join('\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return text.slice(0, 12000);
+  }
+  if (cleanExt === 'pptx') {
+    const entries = extractZipTextEntries(buf, /^ppt\/slides\/slide\d+\.xml$/i).sort((a, b) => {
+      const na = Number(a.name.match(/slide(\d+)\.xml/i)?.[1] || 0);
+      const nb = Number(b.name.match(/slide(\d+)\.xml/i)?.[1] || 0);
+      return na - nb;
+    });
+    const text = entries
+      .map((entry, idx) => {
+        const slideText = decodeXmlEntities(
+          entry.text
+            .replace(/<\/a:p>/g, '\n')
+            .replace(/<a:br[^>]*\/>/g, '\n')
+            .replace(/<[^>]+>/g, ' ')
+        )
+          .replace(/[ \t]+/g, ' ')
+          .replace(/\n\s+/g, '\n')
+          .trim();
+        return slideText ? `Slide ${idx + 1}: ${slideText}` : '';
+      })
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+    return text.slice(0, 12000);
+  }
   if (cleanExt === 'pdf') {
     const latin = buf.toString('latin1');
+    const sources: string[] = [latin];
+    // Also inspect FlateDecode streams safely
+    const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    let sMatch: RegExpExecArray | null;
+    while ((sMatch = streamRegex.exec(latin)) !== null && sources.length < 30) {
+      try {
+        const raw = Buffer.from(sMatch[1], 'latin1');
+        const inflated = zlib.inflateSync(raw, { maxOutputLength: 512 * 1024 });
+        sources.push(inflated.toString('latin1'));
+      } catch {
+        // Non-deflate or non-text stream
+      }
+    }
+
     const chunks: string[] = [];
-    // Extract literal text inside PDF Tj / TJ parentheses operators
-    const parenRegex = /\(([^()\\]{3,300})\)\s*(?:Tj|'|")/g;
-    let match: RegExpExecArray | null;
-    while ((match = parenRegex.exec(latin)) !== null && chunks.length < 400) {
-      const cleaned = match[1].replace(/[^\x20-\x7E\n]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (cleaned.length >= 3) chunks.push(cleaned);
+    for (const src of sources) {
+      const parenRegex = /\(([^()\\]*(?:\\.[^()\\]*)*)\)\s*(?:Tj|'|")/g;
+      let match: RegExpExecArray | null;
+      while ((match = parenRegex.exec(src)) !== null && chunks.length < 600) {
+        const unescaped = match[1].replace(/\\([()\\])/g, '$1').replace(/\\n/g, ' ');
+        const cleaned = unescaped.replace(/[^\x20-\x7E\n]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (cleaned.length >= 2) chunks.push(cleaned);
+      }
     }
     if (chunks.length >= 3) {
       return chunks.join(' ').slice(0, 12000);

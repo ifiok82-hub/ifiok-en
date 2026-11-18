@@ -21,11 +21,12 @@ import {
   ACADEMIC_SUBJECTS,
   getBcp47ForLanguage,
   getLanguageAvailabilitySummary,
+  getLanguageScopeNote,
   isRtlLanguage,
   LANGUAGE_OPTIONS,
   TRANSLATIONS,
 } from '../lib/i18n.ts';
-import type { AiProviderStatus, LanguageCode, UserProfile } from '../types/platform.ts';
+import type { AiCitation, AiProviderStatus, LanguageCode, UserProfile } from '../types/platform.ts';
 
 type ProfessorMode =
   | 'tutor'
@@ -55,6 +56,7 @@ interface ChatMessage {
   id?: number;
   role: 'user' | 'assistant';
   content: string;
+  citations?: AiCitation[];
   created_at?: string;
 }
 
@@ -131,6 +133,7 @@ export function IfiokProfessorPanel({
   const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [generatingQuiz, setGeneratingQuiz] = useState(false);
+  const [quizCitations, setQuizCitations] = useState<AiCitation[]>([]);
 
   // Answer Marking state
   const [markQuestion, setMarkQuestion] = useState('');
@@ -158,6 +161,7 @@ export function IfiokProfessorPanel({
     summary: string;
     explanation: string;
     keyTerms: string[];
+    citations?: AiCitation[];
     extractedLength: number;
     truncated: boolean;
   } | null>(null);
@@ -170,6 +174,7 @@ export function IfiokProfessorPanel({
     aiSessionsCount: number;
     avgGradedScore: number | null;
     focusSubjects: string[];
+    rawText?: string;
     recommendations: Array<{
       title: string;
       subject: string;
@@ -293,6 +298,7 @@ export function IfiokProfessorPanel({
       const res = await apiRequest<{
         sessionId: number;
         reply: string;
+        citations?: AiCitation[];
         provider: string;
         model: string;
       }>('/api/academy/ai/chat', {
@@ -307,7 +313,7 @@ export function IfiokProfessorPanel({
         }),
       });
       setActiveSessionId(res.sessionId);
-      setMessages((prev) => [...prev, { role: 'assistant', content: res.reply }]);
+      setMessages((prev) => [...prev, { role: 'assistant', content: res.reply, citations: res.citations }]);
       loadSessions();
       loadAiStatus();
     } catch (err) {
@@ -355,10 +361,11 @@ export function IfiokProfessorPanel({
     setErrorMsg('');
     setGeneratingQuiz(true);
     setQuizData(null);
+    setQuizCitations([]);
     setQuizAnswers({});
     setQuizSubmitted(false);
     try {
-      const res = await apiRequest<{ quiz: PracticeQuizPayload }>('/api/academy/ai/practice-quiz', {
+      const res = await apiRequest<{ quiz: PracticeQuizPayload; citations?: AiCitation[] }>('/api/academy/ai/practice-quiz', {
         method: 'POST',
         body: JSON.stringify({
           subject,
@@ -368,6 +375,7 @@ export function IfiokProfessorPanel({
         }),
       });
       setQuizData(res.quiz);
+      setQuizCitations(res.citations || []);
       loadAiStatus();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Practice quiz generation failed.');
@@ -448,6 +456,7 @@ export function IfiokProfessorPanel({
         summary: string;
         explanation: string;
         keyTerms: string[];
+        citations?: AiCitation[];
         extractedLength: number;
         truncated: boolean;
       }>('/api/academy/ai/explain-document', {
@@ -485,6 +494,7 @@ export function IfiokProfessorPanel({
         aiSessionsCount: number;
         avgGradedScore: number | null;
         focusSubjects: string[];
+        rawText?: string;
         recommendations: Array<{
           title: string;
           subject: string;
@@ -707,6 +717,9 @@ export function IfiokProfessorPanel({
               <span>Child Safety / AI Report</span>
             </button>
           </div>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            Language scope: {getLanguageScopeNote(chatLang)}
+          </p>
         </div>
       </div>
 
@@ -858,6 +871,18 @@ export function IfiokProfessorPanel({
                 >
                   Retry Quiz
                 </button>
+              )}
+              {quizCitations.length > 0 && (
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-1 text-[11px] text-slate-500">
+                  <div className="font-semibold text-purple-700 dark:text-amber-400">
+                    Grounded in IFIOK SCHOOL Library:
+                  </div>
+                  {quizCitations.map((c) => (
+                    <div key={`${c.sourceType}-${c.id}`} className="font-mono">
+                      [{c.sourceType.replace('_', ' ')}] {c.title} · {c.section} · {c.author} (v{c.version})
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
@@ -1103,6 +1128,18 @@ export function IfiokProfessorPanel({
                   <span className="font-semibold">Key Terms:</span> {docResult.keyTerms.join(', ')}
                 </div>
               )}
+              {docResult.citations && docResult.citations.length > 0 && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1 text-[11px] text-slate-500">
+                  <div className="font-semibold text-purple-700 dark:text-amber-400">
+                    Referenced IFIOK SCHOOL Curriculum Sources:
+                  </div>
+                  {docResult.citations.map((c) => (
+                    <div key={`${c.sourceType}-${c.id}`} className="font-mono">
+                      [{c.sourceType.replace('_', ' ')}] {c.title} · {c.section} · {c.author}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="font-mono text-[11px] text-slate-500 tabular-nums">
                 Extracted {docResult.extractedLength} characters{docResult.truncated ? ' (truncated to context limit)' : ''}
               </div>
@@ -1278,6 +1315,18 @@ export function IfiokProfessorPanel({
                         )}
                       </div>
                       <div className="whitespace-pre-wrap">{m.content}</div>
+                      {m.role === 'assistant' && m.citations && m.citations.length > 0 && (
+                        <div className="pt-2 mt-2 border-t border-slate-200 dark:border-slate-800 space-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+                          <div className="font-semibold text-purple-700 dark:text-amber-400">
+                            Grounded in IFIOK SCHOOL Library:
+                          </div>
+                          {m.citations.map((c) => (
+                            <div key={`${c.sourceType}-${c.id}`} className="font-mono">
+                              • {c.title} · {c.section} · {c.author} (v{c.version})
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))

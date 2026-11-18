@@ -24,7 +24,15 @@ import {
   MARKET_SUITES,
   OPPORTUNITY_TYPES,
 } from '../lib/i18n.ts';
-import type { AiProviderStatus, AppView, SupplierIntegration, UserProfile } from '../types/platform.ts';
+import type {
+  AiProviderStatus,
+  AppView,
+  CopyrightReport,
+  SupplierIntegration,
+  TeacherSubmission,
+  TeacherSubmissionStatus,
+  UserProfile,
+} from '../types/platform.ts';
 import { BrandLogo } from './BrandLogo.tsx';
 
 type AdminTab =
@@ -56,6 +64,8 @@ interface AdminOverviewData {
     pendingOpportunities: number;
     pendingServices: number;
     pendingSchools?: number;
+    pendingTeacherSubmissions?: number;
+    openCopyrightReports?: number;
     openSafetyReports?: number;
     openDisputes: number;
     completedPaymentsCount: number;
@@ -84,6 +94,8 @@ interface AdminOverviewData {
   opportunities: Array<Record<string, unknown>>;
   services: Array<Record<string, unknown>>;
   schools?: Array<Record<string, unknown>>;
+  teacherSubmissions?: TeacherSubmission[];
+  copyrightReports?: CopyrightReport[];
   communityPosts: Array<Record<string, unknown>>;
   transactions: Array<Record<string, unknown>>;
   piTestnetPayments: Array<Record<string, unknown>>;
@@ -631,8 +643,10 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   { label: 'Suspended Accounts', val: data.analytics.suspendedUsers },
                   { label: 'Pending Businesses', val: data.analytics.pendingBusinesses },
                   { label: 'Pending Courses', val: data.analytics.pendingCourses },
+                  { label: 'Pending Teacher Submissions', val: data.analytics.pendingTeacherSubmissions ?? 0 },
                   { label: 'Pending Market Products', val: data.analytics.pendingProducts },
                   { label: 'Pending Opportunities', val: data.analytics.pendingOpportunities },
+                  { label: 'Open Copyright / IP Reports', val: data.analytics.openCopyrightReports ?? 0 },
                   { label: 'Open Disputes', val: data.analytics.openDisputes },
                   { label: 'Completed Pi Payments', val: data.analytics.completedPaymentsCount },
                   { label: 'Verified Pi Volume', val: `${data.analytics.completedVolumePi.toFixed(2)} π` },
@@ -887,6 +901,104 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                     mutate(`/api/admin/services/${id}`, 'PATCH', { moderationAction: action, reviewNotes })
                   }
                 />
+
+                {/* 9-State Teacher Contributions Moderation Queue */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-purple-700 dark:text-amber-400" />
+                    <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                      Teacher Contributions &amp; Lesson Materials Queue (9-State Workflow)
+                    </h2>
+                  </div>
+                  {(data.teacherSubmissions || []).length === 0 ? (
+                    <p className="text-sm text-slate-500">No teacher contributions submitted yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {(data.teacherSubmissions || []).map((sub) => (
+                        <div
+                          key={sub.id}
+                          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-4 space-y-3"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="space-y-1 max-w-2xl">
+                              <div className="text-xs font-mono text-purple-700 dark:text-amber-400">
+                                #{sub.id} · Status: <strong>{sub.status}</strong> · v{sub.current_version} · {sub.subject} · {sub.level} · {(sub.language_code || 'en').toUpperCase()}
+                              </div>
+                              <div className="font-semibold text-sm text-slate-950 dark:text-white">{sub.title}</div>
+                              <div className="text-xs text-slate-500">
+                                By {sub.author_name || `User #${sub.author_user_id}`}
+                                {sub.school_name ? ` · ${sub.school_name}` : ''}
+                                {sub.file_original_name ? ` · File: ${sub.file_original_name} (${sub.file_format})` : ''}
+                                {sub.file_sha256 ? ` · SHA-256: ${sub.file_sha256.slice(0, 12)}...` : ''}
+                              </div>
+                              <div className="text-xs text-slate-600 dark:text-slate-300">
+                                Copyright Declaration: {sub.copyright_declared ? 'Confirmed Original / Licensed' : 'Missing'} · License: {sub.license_terms}
+                              </div>
+                              {sub.accessibility_notes && (
+                                <div className="text-xs text-slate-500">Accessibility: {sub.accessibility_notes}</div>
+                              )}
+                              {sub.review_notes && (
+                                <div className="text-xs text-amber-700 dark:text-amber-300">Reviewer Note: {sub.review_notes}</div>
+                              )}
+                            </div>
+                            {sub.file_original_name && (
+                              <a
+                                href={`/api/academy/teacher-submissions/${sub.id}/download`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800"
+                              >
+                                Inspect File
+                              </a>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                            {(
+                              [
+                                'Under Review',
+                                'Revision Required',
+                                'Approved',
+                                'Published',
+                                'Rejected',
+                                'Suspended',
+                                'Archived',
+                              ] as TeacherSubmissionStatus[]
+                            ).map((nextStatus) => (
+                              <button
+                                key={nextStatus}
+                                type="button"
+                                disabled={sub.status === nextStatus}
+                                onClick={() =>
+                                  mutate(
+                                    `/api/admin/teacher-submissions/${sub.id}`,
+                                    'PATCH',
+                                    {
+                                      status: nextStatus,
+                                      reviewNotes:
+                                        nextStatus === 'Revision Required'
+                                          ? 'Reviewer requested revisions for completeness, citations, or accessibility.'
+                                          : nextStatus === 'Published'
+                                            ? 'Approved and published to IFIOK SCHOOL library.'
+                                            : `Status transitioned to ${nextStatus} by moderation review.`,
+                                    },
+                                    `Teacher contribution #${sub.id} set to ${nextStatus}.`
+                                  )
+                                }
+                                className={`px-2.5 py-1 rounded text-[11px] font-mono border cursor-pointer disabled:opacity-40 ${
+                                  sub.status === nextStatus
+                                    ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-semibold'
+                                    : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-amber-500'
+                                }`}
+                              >
+                                {nextStatus}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1908,6 +2020,98 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                               className="px-3 py-1 rounded bg-rose-600 text-white text-xs cursor-pointer"
                             >
                               Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Copyright & IP Takedown Reports */}
+                <div className="space-y-3">
+                  <h2 className="font-display font-bold text-lg">Copyright, IP Infringement &amp; Takedown Reports</h2>
+                  {(data.copyrightReports || []).length === 0 ? (
+                    <p className="text-sm text-slate-500">No copyright or IP takedown notices filed.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {(data.copyrightReports || []).map((rep) => (
+                        <div
+                          key={rep.id}
+                          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-4 flex flex-wrap items-center justify-between gap-4"
+                        >
+                          <div className="space-y-1 max-w-2xl">
+                            <div className="text-xs font-mono text-slate-500 uppercase">
+                              IP Notice #{rep.id} · {rep.target_type} #{rep.target_id} · Status:{' '}
+                              <strong className="text-purple-700 dark:text-amber-400">{rep.status}</strong>
+                            </div>
+                            <div className="font-semibold text-sm text-slate-950 dark:text-white">{rep.reason}</div>
+                            <div className="text-xs text-slate-500">
+                              Claimant: {rep.claimant_name || rep.reporter_name || `User #${rep.reporter_user_id}`}
+                              {rep.claimant_email ? ` (${rep.claimant_email})` : ''}
+                            </div>
+                            <p className="text-xs text-slate-600 dark:text-slate-300">{rep.details}</p>
+                            {rep.evidence_url && (
+                              <a
+                                href={rep.evidence_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-block text-xs text-purple-700 dark:text-amber-400 underline"
+                              >
+                                Evidence Link
+                              </a>
+                            )}
+                            {rep.admin_notes && (
+                              <div className="text-xs font-mono text-emerald-700 dark:text-emerald-300">
+                                Resolution: {rep.admin_notes}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                mutate(
+                                  `/api/admin/copyright-reports/${rep.id}`,
+                                  'PATCH',
+                                  { status: 'under_review', adminNotes: 'Assigned for IP verification review.' },
+                                  `IP notice #${rep.id} moved to under_review.`
+                                )
+                              }
+                              className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                            >
+                              Under Review
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                mutate(
+                                  `/api/admin/copyright-reports/${rep.id}`,
+                                  'PATCH',
+                                  {
+                                    status: 'takedown_executed',
+                                    adminNotes: 'Content suspended and removed from public discovery pending proof of rights.',
+                                  },
+                                  `Takedown executed on notice #${rep.id}. Target suspended.`
+                                )
+                              }
+                              className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold cursor-pointer"
+                            >
+                              Execute Takedown
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                mutate(
+                                  `/api/admin/copyright-reports/${rep.id}`,
+                                  'PATCH',
+                                  { status: 'rejected', adminNotes: 'Insufficient infringement evidence or verified license confirmed.' },
+                                  `IP notice #${rep.id} rejected.`
+                                )
+                              }
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
+                            >
+                              Reject Notice
                             </button>
                           </div>
                         </div>

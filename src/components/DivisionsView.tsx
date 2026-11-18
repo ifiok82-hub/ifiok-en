@@ -28,6 +28,7 @@ import {
   DELIVERY_METHODS,
   formatPiPrice,
   FREELANCE_CATEGORIES,
+  IFIOK_DIGITAL_12_CATEGORIES,
   IFIOK_DIGITAL_CATEGORIES,
   LANGUAGE_OPTIONS,
   MARKET_SUITES,
@@ -114,7 +115,13 @@ export function DivisionsView({
   const [hubCategoryFilter, setHubCategoryFilter] = useState('All');
   const [marketSuiteFilter, setMarketSuiteFilter] = useState('all');
   const [marketCategoryFilter, setMarketCategoryFilter] = useState('All');
+  const [selectedDigitalCatId, setSelectedDigitalCatId] = useState<string>('all');
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+  const [ipReportProduct, setIpReportProduct] = useState<Product | null>(null);
+  const [ipReason, setIpReason] = useState('Copyright Infringement / Unlicensed File');
+  const [ipDetails, setIpDetails] = useState('');
+  const [ipEvidenceUrl, setIpEvidenceUrl] = useState('');
+  const [submittingIp, setSubmittingIp] = useState(false);
 
   // Modals / Drawers
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -842,6 +849,33 @@ export function DivisionsView({
     }
   };
 
+  const handleSubmitProductIpReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return onRequireAuth();
+    if (!ipReportProduct) return;
+    setSubmittingIp(true);
+    try {
+      await apiRequest('/api/divisions/copyright-reports', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetType: 'product',
+          targetId: ipReportProduct.id,
+          reason: ipReason,
+          details: ipDetails,
+          evidenceUrl: ipEvidenceUrl,
+        }),
+      });
+      notify('ok', `Copyright / IP report submitted for "${ipReportProduct.title}". Review queued.`);
+      setIpReportProduct(null);
+      setIpDetails('');
+      setIpEvidenceUrl('');
+    } catch (err) {
+      notify('err', err instanceof Error ? err.message : 'Unable to submit IP report.');
+    } finally {
+      setSubmittingIp(false);
+    }
+  };
+
   const tabs: Array<{ id: DivisionTab; label: string; icon: typeof BookOpen }> = [
     { id: 'academy', label: 'IFIOK SCHOOL', icon: BookOpen },
     { id: 'business', label: 'Business Hub', icon: Building2 },
@@ -1319,18 +1353,122 @@ export function DivisionsView({
                   </div>
                 </div>
 
-                {products.length === 0 ? (
-                  <EmptyDivisionState
-                    title="No approved IFIOK DIGITAL or marketplace products yet"
-                    description="IFIOK Market never publishes fake products, synthetic prices, or unverified sellers. Verified creators and authorized partners can register a storefront and list licensed digital suites or genuine goods."
-                    actionLabel="Register Seller Storefront"
-                    onAction={() => handleOpenCreate('onboarding')}
-                  />
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {[...products]
-                      .sort((a, b) => (a.product_type === 'physical' ? 1 : 0) - (b.product_type === 'physical' ? 1 : 0))
-                      .map((p) => {
+                {/* 12 Official IFIOK DIGITAL Categories Quick Filter */}
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-4 space-y-2.5">
+                  <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                    12 Official IFIOK DIGITAL Categories &amp; Verified Physical Commerce
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDigitalCatId('all');
+                        setMarketSuiteFilter('all');
+                        setMarketCategoryFilter('All');
+                        setFilterValue('All');
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${
+                        selectedDigitalCatId === 'all' && filterValue !== 'physical'
+                          ? 'bg-[#0E1A36] text-white dark:bg-amber-500 dark:text-slate-950'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      All Products
+                    </button>
+                    {IFIOK_DIGITAL_12_CATEGORIES.map((cat) => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        title={cat.description}
+                        onClick={() => {
+                          setSelectedDigitalCatId(cat.id);
+                          setMarketSuiteFilter('all');
+                          setMarketCategoryFilter('All');
+                          setFilterValue('All');
+                        }}
+                        className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${
+                          selectedDigitalCatId === cat.id
+                            ? 'bg-[#0E1A36] text-white dark:bg-amber-500 dark:text-slate-950'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        {cat.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDigitalCatId('physical');
+                        setMarketSuiteFilter('all');
+                        setMarketCategoryFilter('All');
+                        setFilterValue('physical');
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${
+                        selectedDigitalCatId === 'physical' || filterValue === 'physical'
+                          ? 'bg-[#0E1A36] text-white dark:bg-amber-500 dark:text-slate-950'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      Verified Physical Goods
+                    </button>
+                  </div>
+                </div>
+
+                {(() => {
+                  const filteredMarketProducts = [...products]
+                    .filter((p) => {
+                      if (selectedDigitalCatId === 'all' || selectedDigitalCatId === 'physical') return true;
+                      const hay = `${p.title} ${p.category} ${p.market_suite} ${p.description}`.toLowerCase();
+                      switch (selectedDigitalCatId) {
+                        case 'ebooks_textbooks':
+                          return hay.includes('ebook') || hay.includes('e-book') || hay.includes('guide') || hay.includes('textbook') || hay.includes('skills');
+                        case 'study_exam_packs':
+                          return hay.includes('study') || hay.includes('exam') || hay.includes('math') || hay.includes('practice');
+                        case 'teacher_packs':
+                          return hay.includes('teacher') || hay.includes('classroom') || hay.includes('rubric') || hay.includes('lesson');
+                        case 'software_tools':
+                          return hay.includes('software') || hay.includes('utility') || hay.includes('tool') || hay.includes('sdk');
+                        case 'website_ui_kits':
+                          return hay.includes('website') || hay.includes('ui') || hay.includes('theme') || hay.includes('starter kit');
+                        case 'accounting_finance':
+                          return hay.includes('accounting') || hay.includes('finance') || hay.includes('spreadsheet') || hay.includes('ledger');
+                        case 'business_plans_cv':
+                          return hay.includes('business') || hay.includes('entrepreneur') || hay.includes('cv') || hay.includes('resume');
+                        case 'marketing_growth':
+                          return hay.includes('marketing') || hay.includes('seo') || hay.includes('growth');
+                        case 'design_branding':
+                          return hay.includes('design') || hay.includes('branding') || hay.includes('creative') || hay.includes('presentation');
+                        case 'audio_media':
+                          return hay.includes('audio') || hay.includes('video') || hay.includes('media') || hay.includes('preset');
+                        case 'web3_pi_apps':
+                          return hay.includes('web3') || hay.includes('pi') || hay.includes('blockchain');
+                        case 'creator_collectibles':
+                          return hay.includes('collectible') || hay.includes('creator') || hay.includes('gaming');
+                        default:
+                          return true;
+                      }
+                    })
+                    .sort((a, b) => (a.product_type === 'physical' ? 1 : 0) - (b.product_type === 'physical' ? 1 : 0));
+
+                  return filteredMarketProducts.length === 0 ? (
+                    <EmptyDivisionState
+                      title="No approved IFIOK DIGITAL or marketplace products match this filter"
+                      description="IFIOK Market never publishes fake products, synthetic prices, or unverified sellers. Try clearing filters or list a licensed digital package."
+                      actionLabel={selectedDigitalCatId !== 'all' ? 'Show All Products' : 'Register Seller Storefront'}
+                      onAction={() => {
+                        if (selectedDigitalCatId !== 'all') {
+                          setSelectedDigitalCatId('all');
+                          setMarketSuiteFilter('all');
+                          setMarketCategoryFilter('All');
+                          setFilterValue('All');
+                        } else {
+                          handleOpenCreate('onboarding');
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {filteredMarketProducts.map((p) => {
                       const price = formatPiPrice(p.price_pi, currency, usdRate);
                       const suiteInfo = MARKET_SUITES.find((ms) => ms.id === p.market_suite);
                       const deliveryLabel = DELIVERY_METHODS.find((dm) => dm.id === p.delivery_method)?.label || p.delivery_method;
@@ -1426,8 +1564,9 @@ export function DivisionsView({
                         </article>
                       );
                     })}
-                  </div>
-                )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -2527,6 +2666,26 @@ export function DivisionsView({
                   <span className="font-mono text-slate-800 dark:text-slate-200">{detailProduct.last_verified_at}</span>
                 </div>
               )}
+              {(() => {
+                try {
+                  const highlights = JSON.parse(detailProduct.preview_images_json || '[]') as unknown;
+                  if (Array.isArray(highlights) && highlights.length > 0 && typeof highlights[0] === 'string') {
+                    return (
+                      <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+                        <div className="text-slate-500 mb-1">Included Package Contents & Highlights:</div>
+                        <ul className="list-disc list-inside space-y-0.5 text-slate-800 dark:text-slate-200">
+                          {(highlights as string[]).map((h, idx) => (
+                            <li key={`hl-${idx}`}>{h}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  }
+                } catch {
+                  // ignore non-JSON
+                }
+                return null;
+              })()}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
               <div>
@@ -2539,7 +2698,18 @@ export function DivisionsView({
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!user) return onRequireAuth();
+                    setIpReportProduct(detailProduct);
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-semibold cursor-pointer"
+                >
+                  <Flag className="w-3.5 h-3.5" />
+                  <span>Report IP</span>
+                </button>
                 {detailProduct.product_type !== 'physical' && (
                   <button
                     type="button"
@@ -2565,6 +2735,65 @@ export function DivisionsView({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* COPYRIGHT / IP REPORT MODAL */}
+      {ipReportProduct && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/75 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display font-bold text-slate-950 dark:text-white">Report Copyright / IP Issue</h3>
+              <button type="button" onClick={() => setIpReportProduct(null)} className="cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Target: <strong className="text-slate-900 dark:text-white">{ipReportProduct.title}</strong>
+            </p>
+            <form onSubmit={handleSubmitProductIpReport} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">Claim Type / Reason</label>
+                <input
+                  type="text"
+                  required
+                  minLength={5}
+                  value={ipReason}
+                  onChange={(e) => setIpReason(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Details & Ownership Basis</label>
+                <textarea
+                  rows={3}
+                  required
+                  minLength={15}
+                  value={ipDetails}
+                  onChange={(e) => setIpDetails(e.target.value)}
+                  placeholder="Describe the infringed copyrighted material or trademark claim..."
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Evidence URL (Optional)</label>
+                <input
+                  type="url"
+                  value={ipEvidenceUrl}
+                  onChange={(e) => setIpEvidenceUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={submittingIp}
+                className="w-full py-2.5 rounded-lg bg-rose-600 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                {submittingIp ? 'Submitting Notice...' : 'Submit Takedown Notice'}
+              </button>
+            </form>
           </div>
         </div>
       )}

@@ -19,6 +19,7 @@ import virtualClassroomImg from '../assets/images/global_virtual_classroom_17947
 import { apiRequest } from '../lib/api.ts';
 import { ACADEMIC_SUBJECTS, COUNTRIES } from '../lib/i18n.ts';
 import type { LanguageCode, SchoolSummary, UserProfile } from '../types/platform.ts';
+import { TeacherContributionsSection } from './TeacherContributionsSection.tsx';
 
 interface SchoolWorkspaceData {
   school: {
@@ -1914,6 +1915,16 @@ export function SchoolManagementPortal({
           )}
         </div>
       ) : null}
+
+      {portalMode === 'teacher' && (
+        <TeacherContributionsSection
+          user={user}
+          mode="studio"
+          schoolId={selectedSchoolId || null}
+          onRequireAuth={onRequireAuth}
+          onNotify={(type, text) => setNotice({ type, text })}
+        />
+      )}
 
       {/* Register Institution Modal */}
       {showApplyModal && (

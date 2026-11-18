@@ -160,10 +160,108 @@ export interface Course {
   availability_status?: string;
   last_verified_at?: string | null;
   has_locked_content?: number;
+  author_name?: string;
+  publication_date?: string;
+  version?: string;
+  review_status?: string;
+  rights_info?: string;
+  curriculum_mapping?: string;
   avg_rating?: number | null;
   review_count?: number;
   created_at: string;
 }
+
+export interface AiCitation {
+  sourceType: 'course' | 'teacher_submission' | 'school_lesson';
+  id: number;
+  title: string;
+  section: string;
+  author: string;
+  version: string;
+  subject: string;
+}
+
+export type TeacherSubmissionStatus =
+  | 'Draft'
+  | 'Submitted'
+  | 'Under Review'
+  | 'Revision Required'
+  | 'Approved'
+  | 'Published'
+  | 'Rejected'
+  | 'Suspended'
+  | 'Archived';
+
+export interface TeacherSubmission {
+  id: number;
+  author_user_id: number;
+  author_name?: string;
+  author_email?: string;
+  school_id?: number | null;
+  school_name?: string | null;
+  title: string;
+  description: string;
+  subject: string;
+  level: string;
+  country: string;
+  language_code: string;
+  category: string;
+  accessibility_notes: string;
+  copyright_declared: number;
+  license_terms: string;
+  current_version: string;
+  file_original_name: string;
+  file_format: string;
+  file_size_bytes: number;
+  file_sha256: string;
+  status: TeacherSubmissionStatus;
+  review_notes: string;
+  published_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeacherSubmissionVersion {
+  id: number;
+  submission_id: number;
+  version: string;
+  file_original_name: string;
+  file_format: string;
+  file_size_bytes: number;
+  file_sha256: string;
+  change_notes: string;
+  actor_name?: string;
+  created_at: string;
+}
+
+export interface CopyrightReport {
+  id: number;
+  reporter_user_id: number | null;
+  reporter_name?: string;
+  target_type: 'course' | 'teacher_submission' | 'product';
+  target_id: number;
+  claimant_name: string;
+  claimant_email: string;
+  reason: string;
+  details: string;
+  evidence_url: string;
+  status: 'open' | 'under_review' | 'takedown_executed' | 'rejected';
+  admin_notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PolicyKey =
+  | 'terms'
+  | 'privacy'
+  | 'refund'
+  | 'seller'
+  | 'community'
+  | 'child_safety'
+  | 'teacher_content'
+  | 'ip_policy'
+  | 'digital_licence'
+  | 'acceptable_use';
 
 export interface CourseCompletenessResult {
   score: number;

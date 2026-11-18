@@ -14,9 +14,11 @@ import {
   assignRole,
   createNotification,
   recordAudit,
+  recordSecurityEvent,
   requireAuth,
   requireRole,
 } from '../middleware/auth.ts';
+import { TEACHER_SUBMISSION_STATUSES } from './teacherSubmissions.ts';
 
 const router = Router();
 
@@ -69,6 +71,8 @@ router.get('/overview', (_req, res) => {
     pendingOpportunities: (db.prepare(`SELECT COUNT(*) as c FROM opportunities WHERE approval_status = 'pending'`).get() as { c: number }).c,
     pendingServices: (db.prepare(`SELECT COUNT(*) as c FROM freelance_services WHERE approval_status = 'pending'`).get() as { c: number }).c,
     pendingSchools: (db.prepare(`SELECT COUNT(*) as c FROM schools WHERE verification_status = 'pending'`).get() as { c: number }).c,
+    pendingTeacherSubmissions: (db.prepare(`SELECT COUNT(*) as c FROM teacher_submissions WHERE status IN ('Submitted', 'Under Review')`).get() as { c: number }).c,
+    openCopyrightReports: (db.prepare(`SELECT COUNT(*) as c FROM copyright_reports WHERE status IN ('open', 'under_review')`).get() as { c: number }).c,
     openSafetyReports: (db.prepare(`SELECT COUNT(*) as c FROM student_safety_reports WHERE status = 'open'`).get() as { c: number }).c,
     openDisputes: (db.prepare(`SELECT COUNT(*) as c FROM disputes WHERE status IN ('open', 'under_review')`).get() as { c: number }).c,
     completedPaymentsCount: (db.prepare(`SELECT COUNT(*) as c FROM payments WHERE status = 'completed'`).get() as { c: number }).c,
@@ -189,6 +193,26 @@ router.get('/overview', (_req, res) => {
     ORDER BY pd.downloaded_at DESC LIMIT 60
   `).all();
 
+  const teacherSubmissions = db.prepare(`
+    SELECT ts.id, ts.author_user_id, ts.school_id, ts.title, ts.description, ts.subject, ts.level, ts.country,
+           ts.language_code, ts.category, ts.accessibility_notes, ts.copyright_declared, ts.license_terms,
+           ts.current_version, ts.file_original_name, ts.file_format, ts.file_size_bytes, ts.file_sha256,
+           ts.status, ts.review_notes, ts.published_at, ts.created_at, ts.updated_at,
+           u.full_name as author_name, u.email as author_email,
+           sc.name as school_name
+    FROM teacher_submissions ts
+    JOIN users u ON u.id = ts.author_user_id
+    LEFT JOIN schools sc ON sc.id = ts.school_id
+    ORDER BY ts.updated_at DESC LIMIT 120
+  `).all();
+
+  const copyrightReports = db.prepare(`
+    SELECT cr.*, u.full_name as reporter_name
+    FROM copyright_reports cr
+    LEFT JOIN users u ON u.id = cr.reporter_user_id
+    ORDER BY cr.created_at DESC LIMIT 100
+  `).all();
+
   let backupFiles: string[] = [];
   if (fs.existsSync(BACKUPS_DIR)) {
     backupFiles = fs.readdirSync(BACKUPS_DIR).filter((f) => f.endsWith('.db') || f.endsWith('.json')).sort().reverse();
@@ -207,6 +231,8 @@ router.get('/overview', (_req, res) => {
     opportunities,
     services,
     schools,
+    teacherSubmissions,
+    copyrightReports,
     communityPosts,
     transactions,
     piTestnetPayments,
@@ -625,6 +651,157 @@ router.patch('/schools/:id', requireRole('super_admin', 'moderator'), (req, res)
   );
   recordAudit(req.authUser!.id, 'school_moderation', 'school', id, req.ip || '', { status: mapped.label, reviewNotes });
   res.json({ ok: true, status: mapped.label });
+});
+
+router.patch('/teacher-submissions/:id', requireRole('super_admin', 'moderator'), (req, res) => {
+  const id = Number(req.params.id);
+  const nextStatus = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
+  const reviewNotes = typeof req.body?.reviewNotes === 'string' ? req.body.reviewNotes.trim().slice(0, 600) : '';
+
+  if (!(TEACHER_SUBMISSION_STATUSES as readonly string[]).includes(nextStatus)) {
+    return res.status(400).json({
+      error: `Invalid teacher submission status. Allowed: ${TEACHER_SUBMISSION_STATUSES.join(', ')}.`,
+    });
+  }
+
+  const row = db
+    .prepare(`SELECT id, author_user_id, title, status, copyright_declared FROM teacher_submissions WHERE id = ?`)
+    .get(id) as
+    | { id: number; author_user_id: number; title: string; status: string; copyright_declared: number }
+    | undefined;
+  if (!row) return res.status(404).json({ error: 'Teacher submission not found.' });
+
+  if ((nextStatus === 'Approved' || nextStatus === 'Published') && row.copyright_declared !== 1) {
+    return res.status(400).json({ error: 'Cannot approve or publish a contribution without a signed copyright declaration.' });
+  }
+
+  db.prepare(`
+    UPDATE teacher_submissions
+    SET status = ?,
+        reviewer_user_id = ?,
+        review_notes = ?,
+        published_at = CASE WHEN ? = 'Published' THEN COALESCE(published_at, datetime('now')) ELSE published_at END,
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(nextStatus, req.authUser!.id, reviewNotes, nextStatus, id);
+
+  createNotification(
+    row.author_user_id,
+    'academy',
+    'Teacher Contribution Review Update',
+    `"${row.title}" status is now ${nextStatus}.${reviewNotes ? ` Reviewer notes: ${reviewNotes}` : ''}`,
+    'academy'
+  );
+  recordAudit(req.authUser!.id, 'teacher_submission_moderated', 'teacher_submission', id, req.ip || '', {
+    previousStatus: row.status,
+    nextStatus,
+    reviewNotes,
+  });
+
+  return res.json({ ok: true, status: nextStatus });
+});
+
+router.patch('/copyright-reports/:id', requireRole('super_admin', 'moderator'), (req, res) => {
+  const id = Number(req.params.id);
+  const nextStatus = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
+  const adminNotes = typeof req.body?.adminNotes === 'string' ? req.body.adminNotes.trim().slice(0, 600) : '';
+
+  if (!['open', 'under_review', 'takedown_executed', 'rejected'].includes(nextStatus)) {
+    return res.status(400).json({ error: 'Invalid copyright report status.' });
+  }
+
+  const report = db.prepare(`SELECT * FROM copyright_reports WHERE id = ?`).get(id) as
+    | { id: number; reporter_user_id: number | null; target_type: string; target_id: number; reason: string }
+    | undefined;
+  if (!report) return res.status(404).json({ error: 'Copyright report not found.' });
+
+  let ownerUserId: number | null = null;
+  let targetTitle = `#${report.target_id}`;
+
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE copyright_reports
+      SET status = ?, admin_notes = ?, resolved_by_user_id = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(nextStatus, adminNotes, req.authUser!.id, id);
+
+    if (nextStatus === 'takedown_executed') {
+      if (report.target_type === 'teacher_submission') {
+        const sub = db.prepare(`SELECT author_user_id, title FROM teacher_submissions WHERE id = ?`).get(report.target_id) as
+          | { author_user_id: number; title: string }
+          | undefined;
+        if (sub) {
+          ownerUserId = sub.author_user_id;
+          targetTitle = sub.title;
+        }
+        db.prepare(`
+          UPDATE teacher_submissions
+          SET status = 'Suspended', review_notes = ?, reviewer_user_id = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(adminNotes || `Suspended via IP takedown #${id}: ${report.reason}`, req.authUser!.id, report.target_id);
+      } else if (report.target_type === 'course') {
+        const course = db
+          .prepare(`SELECT c.title, i.user_id as owner_id FROM courses c JOIN instructors i ON i.id = c.instructor_id WHERE c.id = ?`)
+          .get(report.target_id) as { title: string; owner_id: number } | undefined;
+        if (course) {
+          ownerUserId = course.owner_id;
+          targetTitle = course.title;
+        }
+        db.prepare(`
+          UPDATE courses
+          SET approval_status = 'rejected', moderation_action = 'suspended', review_notes = ?
+          WHERE id = ?
+        `).run(adminNotes || `Suspended via IP takedown #${id}: ${report.reason}`, report.target_id);
+      } else if (report.target_type === 'product') {
+        const prod = db
+          .prepare(`SELECT p.title, s.user_id as owner_id FROM products p JOIN sellers s ON s.id = p.seller_id WHERE p.id = ?`)
+          .get(report.target_id) as { title: string; owner_id: number } | undefined;
+        if (prod) {
+          ownerUserId = prod.owner_id;
+          targetTitle = prod.title;
+        }
+        db.prepare(`
+          UPDATE products
+          SET approval_status = 'rejected', moderation_action = 'suspended', lifecycle_status = 'suspended', review_notes = ?
+          WHERE id = ?
+        `).run(adminNotes || `Suspended via IP takedown #${id}: ${report.reason}`, report.target_id);
+      }
+
+      if (ownerUserId) {
+        createNotification(
+          ownerUserId,
+          'moderation',
+          'Content Suspended Pending IP Review',
+          `Your ${report.target_type.replace('_', ' ')} "${targetTitle}" was suspended following Copyright/IP report #${id}.${adminNotes ? ` Notes: ${adminNotes}` : ''}`,
+          'academy'
+        );
+      }
+      recordSecurityEvent(
+        'copyright_takedown_executed',
+        'warning',
+        req.authUser!.id,
+        req.ip || '',
+        `Executed IP takedown #${id} on ${report.target_type} #${report.target_id} (${targetTitle})`
+      );
+    }
+
+    if (report.reporter_user_id) {
+      createNotification(
+        report.reporter_user_id,
+        'support',
+        'Copyright Report Update',
+        `Copyright notice #${id} status updated to "${nextStatus}". ${adminNotes}`,
+        'support'
+      );
+    }
+    recordAudit(req.authUser!.id, 'copyright_report_updated', 'copyright_report', id, req.ip || '', {
+      nextStatus,
+      targetType: report.target_type,
+      targetId: report.target_id,
+    });
+  })();
+
+  return res.json({ ok: true, status: nextStatus });
 });
 
 // Entitlement Lock / Revoke / Unlock Control (enforces paid order before unlocking)

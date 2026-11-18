@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import { db, initDatabase } from './server/db.ts';
+import { seedOriginalCatalogIfNeeded } from './server/lib/seedOriginalCatalog.ts';
 import { csrfOriginGuard } from './server/middleware/auth.ts';
 import adminRoutes from './server/routes/admin.ts';
 import aiRoutes from './server/routes/ai.ts';
@@ -16,11 +17,13 @@ import divisionRoutes from './server/routes/divisions.ts';
 import paymentRoutes from './server/routes/payments.ts';
 import piTestnetRoutes from './server/routes/piTestnet.ts';
 import schoolRoutes from './server/routes/school.ts';
+import teacherSubmissionsRoutes from './server/routes/teacherSubmissions.ts';
 import uploadRoutes from './server/routes/uploads.ts';
 
 dotenv.config();
 
 initDatabase();
+seedOriginalCatalogIfNeeded();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -52,6 +55,7 @@ app.use(
   })
 );
 app.use('/api/uploads', express.json({ limit: '24mb' }));
+app.use('/api/academy/teacher-submissions', express.json({ limit: '24mb' }));
 app.use('/api/academy/ai/explain-document', express.json({ limit: '10mb' }));
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
@@ -81,6 +85,7 @@ app.use('/api/admin', apiLimiter, adminRoutes);
 app.use('/api/uploads', apiLimiter, uploadRoutes);
 app.use('/api/academy/ai', apiLimiter, aiRoutes);
 app.use('/api/academy/schools', apiLimiter, schoolRoutes);
+app.use('/api/academy/teacher-submissions', apiLimiter, teacherSubmissionsRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', platform: 'IFIOK-EN', environment: 'testnet' });

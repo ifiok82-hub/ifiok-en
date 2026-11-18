@@ -158,7 +158,7 @@ router.post('/register', (req, res) => {
       ageGroup,
       guardianName,
       guardianEmail,
-      ageGroup === 'adult' ? 1 : guardianEmail ? 1 : 0
+      ageGroup === 'adult' ? 1 : 0
     );
     const id = Number(ins.lastInsertRowid);
     assignRole(id, 'member', id);
@@ -396,7 +396,6 @@ router.patch('/profile', requireAuth, (req, res) => {
         education_level = ?,
         guardian_name = CASE WHEN ? != '' THEN ? ELSE guardian_name END,
         guardian_email = CASE WHEN ? != '' THEN ? ELSE guardian_email END,
-        guardian_consent_verified = CASE WHEN ? != '' THEN 1 ELSE guardian_consent_verified END,
         updated_at = datetime('now')
     WHERE id = ?
   `).run(
@@ -411,7 +410,6 @@ router.patch('/profile', requireAuth, (req, res) => {
     educationLevel,
     guardianName,
     guardianName,
-    guardianEmail,
     guardianEmail,
     guardianEmail,
     req.authUser!.id

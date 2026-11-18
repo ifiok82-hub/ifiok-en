@@ -25,6 +25,7 @@ router.get('/public-summary', (_req, res) => {
            c.level, c.duration_hours, c.price_pi, c.syllabus_json, c.description, c.image_url,
            c.approval_status, c.is_featured, c.completeness_score,
            c.source_origin, c.source_url, c.availability_status, c.last_verified_at, c.created_at,
+           c.author_name, c.publication_date, c.version, c.review_status, c.rights_info, c.curriculum_mapping,
            u.full_name as instructor_name, i.headline as instructor_headline
     FROM courses c
     JOIN instructors i ON i.id = c.instructor_id
@@ -192,6 +193,7 @@ router.get('/courses', optionalAuth, (req, res) => {
            c.workbooks_exercises_json, c.exam_questions_json, c.answer_keys_text, c.course_files_json,
            c.locked_materials_enc,
            c.source_origin, c.source_url, c.availability_status, c.last_verified_at, c.created_at,
+           c.author_name, c.publication_date, c.version, c.review_status, c.rights_info, c.curriculum_mapping,
            (CASE WHEN length(COALESCE(c.locked_materials_enc, '')) > 0 OR c.price_pi > 0 THEN 1 ELSE 0 END) as has_locked_content,
            u.full_name as instructor_name, i.headline as instructor_headline, i.credentials as instructor_credentials, i.user_id as instructor_user_id,
       (SELECT ROUND(AVG(r.rating), 1) FROM reviews r WHERE r.target_type = 'course' AND r.target_id = c.id AND r.moderation_status = 'approved') as avg_rating,
@@ -507,6 +509,7 @@ router.get('/courses/:id/classroom', requireAuth, async (req, res) => {
            c.exam_marking_guide, c.instructor_qualifications_snapshot, c.course_files_json,
            c.prerequisites, c.target_audience, c.copyright_permission, c.certificate_criteria, c.completeness_score,
            c.moderation_action, c.review_notes,
+           c.author_name, c.publication_date, c.version, c.review_status, c.rights_info, c.curriculum_mapping,
            u.full_name as instructor_name, i.credentials as instructor_credentials, i.user_id as instructor_user_id
     FROM courses c
     JOIN instructors i ON i.id = c.instructor_id
@@ -1377,6 +1380,71 @@ router.post('/messages/:id/report', requireAuth, (req, res) => {
   })();
 
   return res.json({ reported: true });
+});
+
+// ================= COPYRIGHT & IP TAKEDOWN REPORTING =================
+router.post('/copyright-reports', requireAuth, (req, res) => {
+  const targetType = typeof req.body?.targetType === 'string' ? req.body.targetType.trim() : '';
+  const targetId = Number(req.body?.targetId);
+  const claimantName = typeof req.body?.claimantName === 'string' ? req.body.claimantName.trim().slice(0, 120) : req.authUser!.full_name;
+  const claimantEmail = typeof req.body?.claimantEmail === 'string' ? req.body.claimantEmail.trim().slice(0, 160) : (req.authUser!.email || '');
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 180) : '';
+  const details = typeof req.body?.details === 'string' ? req.body.details.trim().slice(0, 2000) : '';
+  const evidenceUrl = sanitizeHttpUrl(req.body?.evidenceUrl);
+
+  if (!['course', 'teacher_submission', 'product'].includes(targetType) || !Number.isFinite(targetId) || targetId <= 0) {
+    return res.status(400).json({ error: 'Valid targetType (course, teacher_submission, or product) and targetId are required.' });
+  }
+  if (reason.length < 4 || details.length < 15) {
+    return res.status(400).json({ error: 'Please provide a clear copyright/IP reason and detailed explanation (at least 15 characters).' });
+  }
+
+  let targetExists: { id: number; title?: string } | undefined;
+  if (targetType === 'course') {
+    targetExists = db.prepare(`SELECT id, title FROM courses WHERE id = ?`).get(targetId) as { id: number; title?: string } | undefined;
+  } else if (targetType === 'teacher_submission') {
+    targetExists = db.prepare(`SELECT id, title FROM teacher_submissions WHERE id = ?`).get(targetId) as { id: number; title?: string } | undefined;
+  } else {
+    targetExists = db.prepare(`SELECT id, title FROM products WHERE id = ?`).get(targetId) as { id: number; title?: string } | undefined;
+  }
+
+  if (!targetExists) {
+    return res.status(404).json({ error: 'Referenced item not found.' });
+  }
+
+  const ins = db.prepare(`
+    INSERT INTO copyright_reports (
+      reporter_user_id, target_type, target_id, claimant_name, claimant_email, reason, details, evidence_url, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
+  `).run(req.authUser!.id, targetType, targetId, claimantName, claimantEmail, reason, details, evidenceUrl);
+
+  const reportId = Number(ins.lastInsertRowid);
+  recordAudit(req.authUser!.id, 'copyright_report_filed', 'copyright_report', reportId, req.ip || '', {
+    targetType,
+    targetId,
+    reason,
+  });
+  recordSecurityEvent('copyright_report_filed', 'warning', req.authUser!.id, req.ip || '', `IP report #${reportId} on ${targetType} #${targetId}: ${reason}`);
+
+  const admins = db.prepare(`
+    SELECT DISTINCT ur.user_id FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+    WHERE r.slug IN ('super_admin', 'moderator')
+  `).all() as Array<{ user_id: number }>;
+  for (const a of admins) {
+    createNotification(
+      a.user_id,
+      'moderation',
+      'New Copyright / IP Notice',
+      `Copyright notice #${reportId} filed on ${targetType} "${targetExists.title || `#${targetId}`}".`,
+      'admin'
+    );
+  }
+
+  return res.status(201).json({
+    id: reportId,
+    status: 'open',
+    message: 'Copyright & IP notice logged for Governance review.',
+  });
 });
 
 export default router;

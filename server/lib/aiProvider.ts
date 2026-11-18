@@ -442,7 +442,8 @@ export async function runProfessorCompletion(input: ProfessorRequestInput): Prom
     isMinor
       ? 'CHILD SAFETY RULE: The learner is a minor. Keep all language strictly age-appropriate, encouraging, safe, and focused purely on academics. Never provide harmful, adult, or unmoderated advice; remind them teachers or guardians support their progress.'
       : 'ACADEMIC INTEGRITY: Guide students step-by-step so they understand underlying principles rather than blindly completing graded work without explanation. Recommend 2-3 logical next study topics at the end when helpful.',
-    input.courseContext ? `VERIFIED LESSON CONTEXT:\n${input.courseContext.slice(0, 2500)}` : '',
+    'GROUNDING & CITATION HONESTY RULE: If VERIFIED LESSON CONTEXT sources are provided below, cite them accurately by exact title when drawing on them, and clearly distinguish what comes from IFIOK SCHOOL sources versus general educational explanation. Never fabricate source titles, page numbers, accreditation claims, or citations not present in context.',
+    input.courseContext ? `VERIFIED LESSON CONTEXT:\n${input.courseContext.slice(0, 3200)}` : '',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -569,6 +570,7 @@ export async function generateStructuredPracticeQuiz(params: {
   subject: string;
   topic: string;
   questionCount?: number;
+  courseContext?: string;
 }) {
   const status = getAiProviderStatus();
   const start = Date.now();
@@ -594,6 +596,7 @@ export async function generateStructuredPracticeQuiz(params: {
   }
 
   const languageName = buildLanguageName(params.languageCode);
+  const contextSnippet = params.courseContext ? `\n\nReference Study Context:\n${params.courseContext.slice(0, 2400)}` : '';
 
   if (status.provider === 'gemini') {
     const ai = getGeminiClient()!;
@@ -602,7 +605,7 @@ export async function generateStructuredPracticeQuiz(params: {
 
     const resp = await ai.models.generateContent({
       model: modelUsed,
-      contents: `Create ${count} educational practice multiple-choice questions on Subject "${params.subject}", Topic "${params.topic}", for level "${params.educationLevel}" in language "${languageName}". Include clear explanations and 2 next-study recommendations.`,
+      contents: `Create ${count} educational practice multiple-choice questions on Subject "${params.subject}", Topic "${params.topic}", for level "${params.educationLevel}" in language "${languageName}". Include clear explanations and 2 next-study recommendations.${contextSnippet}`,
       config: {
         systemInstruction:
           'You are IFIOK Professor (AI learning assistant). Output strictly accurate, age-appropriate educational questions with 4 options each (indices 0-3).',
@@ -661,11 +664,21 @@ export async function generateStructuredPracticeQuiz(params: {
     languageCode: params.languageCode,
     subject: params.subject,
     mode: 'practice_quiz',
+    courseContext: params.courseContext,
     prompt: `Return ONLY raw valid JSON (no markdown) with schema {"title": string, "questions": [{"question": string, "options": [string,string,string,string], "correctIndex": number, "explanation": string}], "studyRecommendations": [string]}. Create ${count} questions on "${params.topic}".`,
   });
 
   const clean = out.reply.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
   return JSON.parse(clean);
+}
+
+function parseJsonSafely<T>(raw: string, fallback: T): T {
+  try {
+    const clean = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    return JSON.parse(clean) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function markStudentAnswer(params: {
@@ -689,10 +702,10 @@ export async function markStudentAnswer(params: {
     `Question: ${params.question}`,
     params.markingGuide ? `Marking Guide / Rubric: ${params.markingGuide}` : 'Marking Guide: Standard academic accuracy, clarity, and reasoning.',
     `Student Answer: ${params.studentAnswer}`,
-    `Provide: (1) Estimated Score out of ${maxScore}, (2) Specific strengths, (3) Specific gaps or misconceptions, and (4) Step-by-step model correction.`,
+    `Return ONLY valid raw JSON with keys: {"score": number (0..${maxScore}), "maxScore": ${maxScore}, "strengths": string[], "missingConcepts": string[], "improvedModelAnswer": string, "feedback": string}.`,
   ].join('\n\n');
 
-  return runProfessorCompletion({
+  const out = await runProfessorCompletion({
     userId: params.userId,
     userRoles: params.userRoles,
     ageGroup: params.ageGroup,
@@ -703,6 +716,29 @@ export async function markStudentAnswer(params: {
     mode: 'mark_answer',
     prompt,
   });
+
+  const parsed = parseJsonSafely<{
+    score?: number;
+    maxScore?: number;
+    strengths?: string[];
+    missingConcepts?: string[];
+    improvedModelAnswer?: string;
+    feedback?: string;
+  }>(out.reply, {});
+
+  const boundedScore = Math.max(0, Math.min(maxScore, Number.isFinite(Number(parsed.score)) ? Number(parsed.score) : 0));
+
+  return {
+    score: boundedScore,
+    maxScore,
+    strengths: Array.isArray(parsed.strengths) ? parsed.strengths.map(String) : [],
+    missingConcepts: Array.isArray(parsed.missingConcepts) ? parsed.missingConcepts.map(String) : [],
+    improvedModelAnswer: typeof parsed.improvedModelAnswer === 'string' ? parsed.improvedModelAnswer : '',
+    feedback: typeof parsed.feedback === 'string' && parsed.feedback.trim() ? parsed.feedback : out.reply,
+    provider: out.provider,
+    model: out.model,
+    latencyMs: out.latencyMs,
+  };
 }
 
 export async function explainUploadedDocument(params: {
@@ -716,18 +752,20 @@ export async function explainUploadedDocument(params: {
   fileName?: string;
   documentText: string;
   instruction?: string;
+  courseContext?: string;
 }) {
   const trimmedDoc = params.documentText.slice(0, 9000);
   const prompt = [
     `Explain and simplify the following uploaded study document/notes clearly for a ${params.educationLevel} learner.`,
     params.fileName ? `Source File: ${params.fileName}` : '',
-    params.instruction ? `Learner Focus Request: ${params.instruction}` : 'Produce: (1) Clear plain-language summary, (2) Key concepts/formulas/definitions, and (3) 3 quick self-check questions.',
+    params.instruction ? `Learner Focus Request: ${params.instruction}` : 'Produce a concise summary, step-by-step explanation, and key concepts.',
+    `Return ONLY valid raw JSON with keys: {"summary": string, "explanation": string, "keyTerms": string[]}.`,
     `DOCUMENT CONTENT:\n${trimmedDoc}`,
   ]
     .filter(Boolean)
     .join('\n\n');
 
-  return runProfessorCompletion({
+  const out = await runProfessorCompletion({
     userId: params.userId,
     userRoles: params.userRoles,
     ageGroup: params.ageGroup,
@@ -736,8 +774,24 @@ export async function explainUploadedDocument(params: {
     languageCode: params.languageCode,
     subject: params.subject,
     mode: 'explain_document',
+    courseContext: params.courseContext,
     prompt,
   });
+
+  const parsed = parseJsonSafely<{
+    summary?: string;
+    explanation?: string;
+    keyTerms?: string[];
+  }>(out.reply, {});
+
+  return {
+    summary: typeof parsed.summary === 'string' && parsed.summary.trim() ? parsed.summary.trim() : out.reply.slice(0, 320),
+    explanation: typeof parsed.explanation === 'string' && parsed.explanation.trim() ? parsed.explanation.trim() : out.reply,
+    keyTerms: Array.isArray(parsed.keyTerms) ? parsed.keyTerms.map(String).slice(0, 12) : [],
+    provider: out.provider,
+    model: out.model,
+    latencyMs: out.latencyMs,
+  };
 }
 
 export async function generateStudyRecommendations(params: {
@@ -750,12 +804,12 @@ export async function generateStudyRecommendations(params: {
   progressSummary: string;
 }) {
   const prompt = [
-    `Based strictly on this student's real recorded IFIOK SCHOOL activity below (never invent grades or courses not listed), create a personalized study recommendation and revision schedule:`,
+    `Based strictly on this student's real recorded IFIOK SCHOOL activity below (never invent grades, courses, or achievements not listed), create personalized study recommendations:`,
     params.progressSummary,
-    `Provide concrete, encouraging next steps and prioritized study topics.`,
+    `Return ONLY valid raw JSON with keys: {"focusSubjects": string[], "recommendations": [{"title": string, "subject": string, "reason": string, "actionStep": string}]}. Limit to 3-5 realistic action items.`,
   ].join('\n\n');
 
-  return runProfessorCompletion({
+  const out = await runProfessorCompletion({
     userId: params.userId,
     userRoles: params.userRoles,
     ageGroup: params.ageGroup,
@@ -766,5 +820,28 @@ export async function generateStudyRecommendations(params: {
     mode: 'study_plan',
     prompt,
   });
+
+  const parsed = parseJsonSafely<{
+    focusSubjects?: string[];
+    recommendations?: Array<{ title?: string; subject?: string; reason?: string; actionStep?: string }>;
+  }>(out.reply, {});
+
+  const recommendations = Array.isArray(parsed.recommendations)
+    ? parsed.recommendations.map((r) => ({
+        title: String(r.title || 'Next Study Step'),
+        subject: String(r.subject || 'General Studies'),
+        reason: String(r.reason || ''),
+        actionStep: String(r.actionStep || ''),
+      }))
+    : [];
+
+  return {
+    focusSubjects: Array.isArray(parsed.focusSubjects) ? parsed.focusSubjects.map(String) : [],
+    recommendations,
+    rawText: out.reply,
+    provider: out.provider,
+    model: out.model,
+    latencyMs: out.latencyMs,
+  };
 }
 

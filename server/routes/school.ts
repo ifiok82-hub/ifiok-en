@@ -350,14 +350,18 @@ router.get('/:schoolId/report-card/:studentUserId', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'You may only view your own report card, linked ward report cards, or students in your school.' });
   }
 
-  const school = db.prepare(`SELECT id, name, school_type, country, city FROM schools WHERE id = ?`).get(schoolId);
+  const school = db.prepare(`SELECT id, name, school_type, country, city, accreditation_note FROM schools WHERE id = ?`).get(schoolId) as
+    | { id: number; name: string; school_type: string; country: string; city: string; accreditation_note: string }
+    | undefined;
   const student = db.prepare(`
-    SELECT u.id, u.full_name, u.education_level, sm.class_id, c.name as class_name
+    SELECT u.id, u.full_name, u.email, u.age_group, u.education_level, sm.class_id, c.name as class_name
     FROM school_memberships sm
     JOIN users u ON u.id = sm.user_id
     LEFT JOIN school_classes c ON c.id = sm.class_id
     WHERE sm.school_id = ? AND sm.user_id = ? AND sm.member_role = 'student' AND sm.status = 'active'
-  `).get(schoolId, studentUserId);
+  `).get(schoolId, studentUserId) as
+    | { id: number; full_name: string; email: string | null; age_group: string; education_level: string; class_id: number | null; class_name: string | null }
+    | undefined;
 
   if (!school || !student) {
     return res.status(404).json({ error: 'Enrolled student record not found in this school.' });
@@ -387,6 +391,39 @@ router.get('/:schoolId/report-card/:studentUserId', requireAuth, (req, res) => {
     total_max: number;
   }>;
 
+  const detailRows = db.prepare(`
+    SELECT a.subject, a.title, sub.score, a.max_score, sub.feedback, sub.status
+    FROM assignment_submissions sub
+    JOIN school_assignments a ON a.id = sub.assignment_id
+    WHERE sub.school_id = ? AND sub.student_user_id = ?
+    ORDER BY a.subject ASC, sub.submitted_at DESC
+  `).all(schoolId, studentUserId) as Array<{
+    subject: string;
+    title: string;
+    score: number | null;
+    max_score: number;
+    feedback: string;
+    status: string;
+  }>;
+
+  const subjects = subjectGrades.map((sg) => {
+    const assignmentsForSub = detailRows
+      .filter((d) => d.subject === sg.subject)
+      .map((d) => ({
+        title: d.title,
+        score: d.score,
+        maxScore: d.max_score,
+        feedback: d.feedback || '',
+      }));
+    const gradedCount = detailRows.filter((d) => d.subject === sg.subject && d.status === 'graded').length;
+    return {
+      subject: sg.subject,
+      gradedCount,
+      averagePct: sg.avg_percent,
+      assignments: assignmentsForSub,
+    };
+  });
+
   const attendanceSummary = db.prepare(`
     SELECT
       COUNT(*) as total_days,
@@ -396,18 +433,33 @@ router.get('/:schoolId/report-card/:studentUserId', requireAuth, (req, res) => {
       SUM(CASE WHEN status = 'excused' THEN 1 ELSE 0 END) as excused_days
     FROM school_attendance
     WHERE school_id = ? AND student_user_id = ?
-  `).get(schoolId, studentUserId);
+  `).get(schoolId, studentUserId) as {
+    total_days: number;
+    present_days: number | null;
+    late_days: number | null;
+    absent_days: number | null;
+    excused_days: number | null;
+  };
 
   const gradedSubjects = subjectGrades.filter((g) => g.avg_percent !== null);
   const overallAverage = gradedSubjects.length
     ? Number((gradedSubjects.reduce((acc, g) => acc + Number(g.avg_percent || 0), 0) / gradedSubjects.length).toFixed(1))
     : null;
 
+  const summary = {
+    overallAverage,
+    gradedAssessments: detailRows.filter((d) => d.status === 'graded').length,
+    attendancePresent: Number(attendanceSummary?.present_days || 0),
+    attendanceTotal: Number(attendanceSummary?.total_days || 0),
+  };
+
   return res.json({
     school,
     student,
     activeSession,
     overallAverage,
+    summary,
+    subjects,
     subjectGrades,
     attendanceSummary,
     generatedAt: new Date().toISOString(),

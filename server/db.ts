@@ -797,9 +797,77 @@ export function initDatabase() {
       term_label TEXT DEFAULT 'Term 1',
       start_date TEXT NOT NULL,
       end_date TEXT NOT NULL,
-      is_active INTEGER NOT NULL DEFAULT 1,
+    is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS teacher_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      author_user_id INTEGER NOT NULL,
+      school_id INTEGER,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      level TEXT NOT NULL DEFAULT 'All Levels',
+      country TEXT NOT NULL DEFAULT 'Global',
+      language_code TEXT NOT NULL DEFAULT 'en',
+      category TEXT NOT NULL DEFAULT 'Lesson Plan',
+      accessibility_notes TEXT NOT NULL DEFAULT '',
+      copyright_declared INTEGER NOT NULL DEFAULT 0,
+      license_terms TEXT NOT NULL DEFAULT 'CC BY-NC-SA 4.0 / IFIOK SCHOOL Educational License',
+      current_version TEXT NOT NULL DEFAULT '1.0.0',
+      file_storage_key TEXT NOT NULL DEFAULT '',
+      file_original_name TEXT NOT NULL DEFAULT '',
+      file_format TEXT NOT NULL DEFAULT '',
+      file_mime TEXT NOT NULL DEFAULT '',
+      file_size_bytes INTEGER NOT NULL DEFAULT 0,
+      file_sha256 TEXT NOT NULL DEFAULT '',
+      extracted_text TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Submitted', 'Under Review', 'Revision Required', 'Approved', 'Published', 'Rejected', 'Suspended', 'Archived')),
+      reviewer_user_id INTEGER,
+      review_notes TEXT NOT NULL DEFAULT '',
+      published_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (author_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE SET NULL,
+      FOREIGN KEY (reviewer_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS teacher_submission_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      submission_id INTEGER NOT NULL,
+      version TEXT NOT NULL,
+      file_storage_key TEXT NOT NULL,
+      file_original_name TEXT NOT NULL,
+      file_format TEXT NOT NULL DEFAULT '',
+      file_size_bytes INTEGER NOT NULL DEFAULT 0,
+      file_sha256 TEXT NOT NULL DEFAULT '',
+      change_notes TEXT NOT NULL DEFAULT '',
+      actor_user_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (submission_id) REFERENCES teacher_submissions(id) ON DELETE CASCADE,
+      FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS copyright_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reporter_user_id INTEGER,
+      target_type TEXT NOT NULL CHECK (target_type IN ('course', 'teacher_submission', 'product')),
+      target_id INTEGER NOT NULL,
+      claimant_name TEXT NOT NULL,
+      claimant_email TEXT NOT NULL DEFAULT '',
+      reason TEXT NOT NULL,
+      details TEXT NOT NULL,
+      evidence_url TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'under_review', 'takedown_executed', 'rejected')),
+      admin_notes TEXT NOT NULL DEFAULT '',
+      resolved_by_user_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (reporter_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (resolved_by_user_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_txid_unique ON payments(txid) WHERE txid IS NOT NULL;
@@ -807,7 +875,16 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_pi_testnet_payments_status ON pi_testnet_payments(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_product_downloads_prod ON product_downloads(product_id, downloaded_at);
     CREATE INDEX IF NOT EXISTS idx_school_sessions_school ON school_sessions(school_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_teacher_submissions_status ON teacher_submissions(status, subject, created_at);
+    CREATE INDEX IF NOT EXISTS idx_copyright_reports_status ON copyright_reports(status, created_at);
   `);
+
+  ensureColumn('courses', 'author_name', "TEXT NOT NULL DEFAULT 'IFIOK-EN Editorial Faculty'");
+  ensureColumn('courses', 'publication_date', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('courses', 'version', "TEXT NOT NULL DEFAULT '1.0.0'");
+  ensureColumn('courses', 'review_status', "TEXT NOT NULL DEFAULT 'Approved'");
+  ensureColumn('courses', 'rights_info', "TEXT NOT NULL DEFAULT 'Original IFIOK-EN Educational Material'");
+  ensureColumn('courses', 'curriculum_mapping', "TEXT NOT NULL DEFAULT 'Independent competency framework; no external government or university accreditation claimed.'");
 
   const seedRoles = [
     { slug: 'super_admin', name: 'Global Super Administrator', description: 'Full platform governance, security, backups, and role control', permissions: ['*'] },

@@ -261,6 +261,26 @@ export const IFIOK_DIGITAL_CATEGORIES: Array<{
   { label: 'Web3, Pi Apps & Game-Dev Assets', suiteId: 'gaming_web3', subcategory: 'Verified Pi Ecosystem Apps & Services' },
 ];
 
+export const IFIOK_DIGITAL_12_CATEGORIES: Array<{
+  id: string;
+  label: string;
+  suiteId: string;
+  description: string;
+}> = [
+  { id: 'ebooks_textbooks', label: 'E-books & Digital Textbooks', suiteId: 'digital_learning_publishing', description: 'Original textbooks, workbooks, and curriculum manuals' },
+  { id: 'study_exam_packs', label: 'Study Guides & Exam Prep', suiteId: 'digital_learning_publishing', description: 'Worked question banks and revision study packs' },
+  { id: 'teacher_packs', label: 'Teacher Resource Packs', suiteId: 'digital_learning_publishing', description: 'Lesson plans, marking rubrics, and printable classroom handouts' },
+  { id: 'software_tools', label: 'Licensed Software & Utilities', suiteId: 'software_productivity', description: 'Verified desktop software, SDKs, and developer tools' },
+  { id: 'website_ui_kits', label: 'Website & UI Starter Kits', suiteId: 'software_productivity', description: 'Clean responsive templates, WordPress themes, and starter code' },
+  { id: 'accounting_finance', label: 'Accounting & Financial Models', suiteId: 'business_resources', description: 'SME ledgers, tax workbooks, and cash-flow spreadsheets' },
+  { id: 'business_plans_cv', label: 'Business Kits, Plans & CVs', suiteId: 'business_resources', description: 'Business plan templates, proposals, and career CV kits' },
+  { id: 'marketing_growth', label: 'Digital Marketing Resources', suiteId: 'business_resources', description: 'Content calendars, outreach playbooks, and audit checklists' },
+  { id: 'design_branding', label: 'Branding & Design Assets', suiteId: 'creative_design_assets', description: 'Logos, slide decks, fonts, icons, and social media kits' },
+  { id: 'audio_media', label: 'Audiobooks, Video & Stock Media', suiteId: 'creative_design_assets', description: 'Educational audio guides, presets, and licensed media' },
+  { id: 'web3_pi_apps', label: 'Web3 & Pi Developer Packs', suiteId: 'gaming_web3', description: 'Pi ecosystem guides, smart-contract safety, and app starter packs' },
+  { id: 'creator_collectibles', label: 'Digital Collectibles & Creator Assets', suiteId: 'digital_collectibles', description: 'Authorized creator editions, digital art, and game-dev assets' },
+];
+
 export const DELIVERY_METHODS = [
   { id: 'instant_digital_download', label: 'Instant Digital Download (Vault)' },
   { id: 'license_key', label: 'Verified License Key' },
@@ -826,4 +846,13 @@ export function getLanguageAvailabilitySummary(): {
     totalConfiguredLanguages: LANGUAGE_OPTIONS.length,
     fullUiLanguagesCount,
   };
+}
+
+export function getLanguageScopeNote(code: LanguageCode): string {
+  if (code === 'en') {
+    return 'Full UI, curriculum, and IFIOK Professor tutoring in English.';
+  }
+  const opt = LANGUAGE_OPTIONS.find((l) => l.code === code);
+  const name = opt?.label || code.toUpperCase();
+  return `${name}: Core navigation translated; course descriptions remain in their original author language unless AI-translated inside IFIOK Professor.`;
 }

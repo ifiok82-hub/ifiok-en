@@ -1044,7 +1044,7 @@ export function HomePage({
             ))}
           </div>
 
-          <div className="md:col-span-3 space-y-2 text-xs">
+          <div className="md:col-span-3 space-y-1.5 text-xs">
             <h3 className="font-display font-semibold text-slate-900 dark:text-white mb-2">Trust & Governance Policies</h3>
             {(
               [
@@ -1053,6 +1053,11 @@ export function HomePage({
                 ['refund', 'Refund & Dispute Policy'],
                 ['seller', 'Seller & Creator Policy'],
                 ['community', 'Community Guidelines'],
+                ['child_safety', 'Child Safety Policy'],
+                ['teacher_content', 'Teacher Content Policy'],
+                ['ip_policy', 'IP & Takedown Policy'],
+                ['digital_licence', 'Digital Product Licence'],
+                ['acceptable_use', 'Acceptable Use Policy'],
               ] as Array<[PolicyKey, string]>
             ).map(([key, label]) =>
               key === 'privacy' || key === 'terms' ? (

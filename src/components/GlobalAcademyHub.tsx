@@ -5,6 +5,7 @@ import {
   Building2,
   CheckCircle2,
   Download,
+  Flag,
   GraduationCap,
   Languages,
   Lock,
@@ -20,12 +21,14 @@ import {
   ACADEMIC_SUBJECTS,
   formatPiPrice,
   getLanguageAvailabilitySummary,
+  getLanguageScopeNote,
   LANGUAGE_OPTIONS,
   TRANSLATIONS,
 } from '../lib/i18n.ts';
 import type { AcademySubView, Course, CurrencyCode, LanguageCode, UserProfile } from '../types/platform.ts';
 import { IfiokProfessorPanel } from './IfiokProfessorPanel.tsx';
 import { SchoolManagementPortal } from './SchoolManagementPortal.tsx';
+import { TeacherContributionsSection } from './TeacherContributionsSection.tsx';
 
 interface ClassroomData {
   course: Course;
@@ -98,6 +101,12 @@ export function GlobalAcademyHub({
 
   const [certCode, setCertCode] = useState('');
   const [certResult, setCertResult] = useState<Record<string, unknown> | null>(null);
+
+  const [ipReportTarget, setIpReportTarget] = useState<{ id: number; title: string } | null>(null);
+  const [ipReason, setIpReason] = useState('Copyright / Unlicensed Material');
+  const [ipDetails, setIpDetails] = useState('');
+  const [ipEvidenceUrl, setIpEvidenceUrl] = useState('');
+  const [submittingIp, setSubmittingIp] = useState(false);
 
   useEffect(() => {
     setSubView(initialSubView);
@@ -177,6 +186,36 @@ export function GlobalAcademyHub({
     }
   };
 
+  const handleSubmitIpReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      onRequireAuth();
+      return;
+    }
+    if (!ipReportTarget) return;
+    setSubmittingIp(true);
+    try {
+      await apiRequest('/api/divisions/copyright-reports', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetType: 'course',
+          targetId: ipReportTarget.id,
+          reason: ipReason,
+          details: ipDetails,
+          evidenceUrl: ipEvidenceUrl,
+        }),
+      });
+      onNotify('ok', `Copyright / IP report filed for "${ipReportTarget.title}". Moderation team notified.`);
+      setIpReportTarget(null);
+      setIpDetails('');
+      setIpEvidenceUrl('');
+    } catch (err) {
+      onNotify('err', err instanceof Error ? err.message : 'Unable to submit IP report.');
+    } finally {
+      setSubmittingIp(false);
+    }
+  };
+
   const subTabs: Array<{ id: AcademySubView; label: string; icon: typeof BookOpen }> = [
     { id: 'courses', label: `Courses & 20 ${t.academicTerms.subject}s`, icon: BookOpen },
     { id: 'student_portal', label: 'IFIOK Student Portal', icon: GraduationCap },
@@ -211,6 +250,9 @@ export function GlobalAcademyHub({
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
               Comprehensive multilingual education, institutional school administration, teacher tools, guardian oversight, 22-point verified curricula, and IFIOK Professor AI across {getLanguageAvailabilitySummary().fullUiLanguagesCount} verified languages.
+            </p>
+            <p className="text-[11px] text-amber-200/90 leading-relaxed">
+              {getLanguageScopeNote(language)}
             </p>
           </div>
           <label className="inline-flex items-center gap-1.5 text-xs text-slate-200 bg-white/10 rounded-lg px-3 py-2 border border-white/15">
@@ -379,11 +421,18 @@ export function GlobalAcademyHub({
                         <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">{c.title}</h3>
                         <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-3">{c.description}</p>
                         <div className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5">
-                          <div>Instructor: {c.instructor_name}</div>
+                          <div>
+                            Instructor: {c.author_name || c.instructor_name}
+                            {c.version ? ` · v${c.version}` : ''}
+                            {c.review_status ? ` · ${c.review_status}` : ''}
+                          </div>
                           {c.instructor_credentials && (
                             <div className="truncate">Credentials: {c.instructor_credentials}</div>
                           )}
-                          <div>Issuing Org: {c.issuing_organization || 'IFIOK SCHOOL'}</div>
+                          <div>
+                            Issuing Org: {c.issuing_organization || 'IFIOK SCHOOL'}
+                            {c.publication_date ? ` · Published ${c.publication_date.slice(0, 10)}` : ''}
+                          </div>
                           <div>
                             Curriculum Completeness: <span className="font-mono tabular-nums">{c.completeness_score ?? 0}/{c.completeness_total ?? 22}</span> sections
                           </div>
@@ -391,6 +440,12 @@ export function GlobalAcademyHub({
                             Source: {c.source_origin || 'Authorized Material'}
                             {c.last_verified_at ? ` · Verified ${c.last_verified_at.slice(0, 10)}` : ''}
                           </div>
+                          {(c.rights_info || c.copyright_permission) && (
+                            <div className="truncate">Rights: {c.rights_info || c.copyright_permission}</div>
+                          )}
+                          {c.curriculum_mapping && (
+                            <div className="truncate text-[11px] text-slate-500">Scope: {c.curriculum_mapping}</div>
+                          )}
                         </div>
                         {c.price_pi > 0 && (
                           <div className="flex items-center justify-between pt-1 text-xs">
@@ -417,7 +472,18 @@ export function GlobalAcademyHub({
                           <div className="text-[11px] font-mono text-slate-500">{price.reference}</div>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          title="Report Copyright or IP Issue"
+                          onClick={() => {
+                            if (!user) return onRequireAuth();
+                            setIpReportTarget({ id: c.id, title: c.title });
+                          }}
+                          className="p-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-500 hover:text-rose-600 cursor-pointer"
+                        >
+                          <Flag className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => loadClassroom(c.id)}
@@ -439,6 +505,14 @@ export function GlobalAcademyHub({
               })}
             </div>
           )}
+
+          {/* Published Teacher Resources & Open Community Contributions */}
+          <TeacherContributionsSection
+            user={user}
+            mode="library"
+            onRequireAuth={onRequireAuth}
+            onNotify={onNotify}
+          />
         </div>
       )}
 
@@ -482,12 +556,17 @@ export function GlobalAcademyHub({
               <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
                 <div>
                   <div className="text-xs text-slate-500">
-                    {classroom.course.subject || classroom.course.category} · {classroom.course.instructor_name} ·{' '}
+                    {classroom.course.subject || classroom.course.category} · {classroom.course.author_name || classroom.course.instructor_name} ·{' '}
                     {classroom.course.issuing_organization || 'IFIOK SCHOOL'}
+                    {classroom.course.version ? ` · v${classroom.course.version}` : ''}
+                    {classroom.course.publication_date ? ` · ${classroom.course.publication_date.slice(0, 10)}` : ''}
                   </div>
                   <h3 className="text-xl font-display font-bold text-slate-950 dark:text-white mt-0.5">
                     {classroom.course.title}
                   </h3>
+                  {classroom.course.curriculum_mapping && (
+                    <div className="text-[11px] text-slate-500 mt-0.5">{classroom.course.curriculum_mapping}</div>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -897,6 +976,70 @@ export function GlobalAcademyHub({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {ipReportTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display font-bold text-base text-slate-950 dark:text-white">
+                Report Copyright / IP Issue
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIpReportTarget(null)}
+                className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Course: <strong className="text-slate-800 dark:text-slate-200">{ipReportTarget.title}</strong>
+            </p>
+            <form onSubmit={handleSubmitIpReport} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">Reason</label>
+                <input
+                  type="text"
+                  required
+                  minLength={5}
+                  value={ipReason}
+                  onChange={(e) => setIpReason(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Specific Claim & Evidence Details</label>
+                <textarea
+                  rows={3}
+                  required
+                  minLength={15}
+                  value={ipDetails}
+                  onChange={(e) => setIpDetails(e.target.value)}
+                  placeholder="Describe the infringed copyrighted material, original work, and ownership proof..."
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Evidence URL (Optional)</label>
+                <input
+                  type="url"
+                  value={ipEvidenceUrl}
+                  onChange={(e) => setIpEvidenceUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={submittingIp}
+                className="w-full py-2 rounded-lg bg-rose-600 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                {submittingIp ? 'Submitting Notice...' : 'Submit Takedown Notice'}
+              </button>
+            </form>
           </div>
         </div>
       )}

@@ -33,22 +33,25 @@ export const SUPPORTED_AI_LANGUAGES: AiLanguageSpec[] = [
 
 export const ACADEMIC_SUBJECTS = [
   'Mathematics',
-  'English',
-  'Science',
-  'Biology',
-  'Chemistry',
+  'English Language',
+  'Basic Science',
   'Physics',
+  'Chemistry',
+  'Biology',
   'Computer Science',
   'Programming',
   'Artificial Intelligence',
+  'Robotics',
   'Business Studies',
   'Accounting',
   'Economics',
   'Entrepreneurship',
-  'Digital Marketing',
   'Financial Literacy',
+  'Digital Marketing',
   'Web3 and Blockchain',
+  'Pi ecosystem education',
   'Professional Development',
+  'Vocational and Technical Skills',
 ] as const;
 
 const SAFETY_BLOCK_PATTERNS = [
@@ -167,7 +170,7 @@ export async function testAiProviderConnection(): Promise<{
   try {
     if (status.provider === 'gemini') {
       const ai = getGeminiClient()!;
-      const allowedGeminiModels = new Set(['gemini-4-hydrogen', 'gemini-3.1-flash-lite']);
+      const allowedGeminiModels = new Set(['gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.1-flash-lite']);
       const modelName = allowedGeminiModels.has(status.model) ? status.model : 'gemini-4-hydrogen';
       const resp = await ai.models.generateContent({
         model: modelName,
@@ -233,6 +236,7 @@ export async function testAiProviderConnection(): Promise<{
 
 export interface ProfessorRequestInput {
   userId: number;
+  userRoles?: string[];
   schoolId?: number | null;
   ageGroup: string;
   educationLevel: string;
@@ -265,9 +269,18 @@ function buildLanguageName(code: string): string {
   return found ? `${found.name} (${found.nativeName})` : 'English';
 }
 
+function resolveRoleDailyLimit(baseLimit: number, roles: string[] = []): number {
+  if (roles.includes('super_admin')) return Math.max(baseLimit, 250);
+  if (roles.includes('school_admin') || roles.includes('teacher') || roles.includes('instructor')) {
+    return Math.max(baseLimit, 120);
+  }
+  return baseLimit;
+}
+
 function enforceGuardsAndSafety(input: ProfessorRequestInput) {
   const settings = getSettingsMap();
-  const dailyLimit = Math.max(1, Number(settings.ai_daily_user_limit || 40));
+  const baseLimit = Math.max(1, Number(settings.ai_daily_user_limit || 40));
+  const dailyLimit = resolveRoleDailyLimit(baseLimit, input.userRoles);
   const monthlyCap = Math.max(1, Number(settings.ai_monthly_cost_cap_usd || 50));
   const isMinor = input.ageGroup === 'under_13' || input.ageGroup === 'teen_13_17';
 
@@ -442,7 +455,7 @@ export async function runProfessorCompletion(input: ProfessorRequestInput): Prom
 
     if (status.provider === 'gemini') {
       const ai = getGeminiClient()!;
-      const allowedModels = new Set(['gemini-4-hydrogen', 'gemini-3.1-flash-lite']);
+      const allowedModels = new Set(['gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.1-flash-lite']);
       modelUsed = allowedModels.has(status.model) ? status.model : 'gemini-4-hydrogen';
 
       const historyText = (input.history || [])
@@ -584,7 +597,7 @@ export async function generateStructuredPracticeQuiz(params: {
 
   if (status.provider === 'gemini') {
     const ai = getGeminiClient()!;
-    const allowedModels = new Set(['gemini-4-hydrogen', 'gemini-3.1-flash-lite']);
+    const allowedModels = new Set(['gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.1-flash-lite']);
     const modelUsed = allowedModels.has(status.model) ? status.model : 'gemini-4-hydrogen';
 
     const resp = await ai.models.generateContent({
@@ -654,3 +667,104 @@ export async function generateStructuredPracticeQuiz(params: {
   const clean = out.reply.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
   return JSON.parse(clean);
 }
+
+export async function markStudentAnswer(params: {
+  userId: number;
+  userRoles?: string[];
+  ageGroup: string;
+  educationLevel: string;
+  guardianConsentVerified: number;
+  languageCode: string;
+  subject: string;
+  question: string;
+  markingGuide?: string;
+  studentAnswer: string;
+  maxScore?: number;
+}) {
+  const maxScore = Math.max(1, Math.min(100, Number(params.maxScore) || 10));
+  const prompt = [
+    `Mark and evaluate the student's answer fairly against the question and marking criteria.`,
+    `Subject: ${params.subject}`,
+    `Maximum Score: ${maxScore}`,
+    `Question: ${params.question}`,
+    params.markingGuide ? `Marking Guide / Rubric: ${params.markingGuide}` : 'Marking Guide: Standard academic accuracy, clarity, and reasoning.',
+    `Student Answer: ${params.studentAnswer}`,
+    `Provide: (1) Estimated Score out of ${maxScore}, (2) Specific strengths, (3) Specific gaps or misconceptions, and (4) Step-by-step model correction.`,
+  ].join('\n\n');
+
+  return runProfessorCompletion({
+    userId: params.userId,
+    userRoles: params.userRoles,
+    ageGroup: params.ageGroup,
+    educationLevel: params.educationLevel,
+    guardianConsentVerified: params.guardianConsentVerified,
+    languageCode: params.languageCode,
+    subject: params.subject,
+    mode: 'mark_answer',
+    prompt,
+  });
+}
+
+export async function explainUploadedDocument(params: {
+  userId: number;
+  userRoles?: string[];
+  ageGroup: string;
+  educationLevel: string;
+  guardianConsentVerified: number;
+  languageCode: string;
+  subject: string;
+  fileName?: string;
+  documentText: string;
+  instruction?: string;
+}) {
+  const trimmedDoc = params.documentText.slice(0, 9000);
+  const prompt = [
+    `Explain and simplify the following uploaded study document/notes clearly for a ${params.educationLevel} learner.`,
+    params.fileName ? `Source File: ${params.fileName}` : '',
+    params.instruction ? `Learner Focus Request: ${params.instruction}` : 'Produce: (1) Clear plain-language summary, (2) Key concepts/formulas/definitions, and (3) 3 quick self-check questions.',
+    `DOCUMENT CONTENT:\n${trimmedDoc}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  return runProfessorCompletion({
+    userId: params.userId,
+    userRoles: params.userRoles,
+    ageGroup: params.ageGroup,
+    educationLevel: params.educationLevel,
+    guardianConsentVerified: params.guardianConsentVerified,
+    languageCode: params.languageCode,
+    subject: params.subject,
+    mode: 'explain_document',
+    prompt,
+  });
+}
+
+export async function generateStudyRecommendations(params: {
+  userId: number;
+  userRoles?: string[];
+  ageGroup: string;
+  educationLevel: string;
+  guardianConsentVerified: number;
+  languageCode: string;
+  progressSummary: string;
+}) {
+  const prompt = [
+    `Based strictly on this student's real recorded IFIOK SCHOOL activity below (never invent grades or courses not listed), create a personalized study recommendation and revision schedule:`,
+    params.progressSummary,
+    `Provide concrete, encouraging next steps and prioritized study topics.`,
+  ].join('\n\n');
+
+  return runProfessorCompletion({
+    userId: params.userId,
+    userRoles: params.userRoles,
+    ageGroup: params.ageGroup,
+    educationLevel: params.educationLevel,
+    guardianConsentVerified: params.guardianConsentVerified,
+    languageCode: params.languageCode,
+    subject: 'Study Planning',
+    mode: 'study_plan',
+    prompt,
+  });
+}
+

@@ -235,6 +235,10 @@ router.get('/:schoolId/workspace', requireAuth, (req, res) => {
     LIMIT 40
   `).all(schoolId);
 
+  const sessions = db.prepare(`
+    SELECT * FROM school_sessions WHERE school_id = ? ORDER BY is_active DESC, start_date DESC
+  `).all(schoolId);
+
   const studentCount = (db.prepare(`SELECT COUNT(*) as c FROM school_memberships WHERE school_id = ? AND member_role = 'student' AND status = 'active'`).get(schoolId) as { c: number }).c;
   const teacherCount = (db.prepare(`SELECT COUNT(*) as c FROM school_memberships WHERE school_id = ? AND member_role = 'teacher' AND status = 'active'`).get(schoolId) as { c: number }).c;
   const avgScoreRow = db.prepare(`SELECT ROUND(AVG(score), 1) as avg FROM assignment_submissions WHERE school_id = ? AND status = 'graded'`).get(schoolId) as { avg: number | null };
@@ -254,6 +258,7 @@ router.get('/:schoolId/workspace', requireAuth, (req, res) => {
       assignments: assignments.length,
       averageGradedScore: avgScoreRow.avg,
     },
+    sessions,
     departments,
     classes,
     roster,
@@ -280,6 +285,133 @@ router.post('/:schoolId/departments', requireAuth, (req, res) => {
   `).run(schoolId, name, description);
   recordAudit(req.authUser!.id, 'school_department_created', 'school_department', Number(ins.lastInsertRowid), req.ip || '', { schoolId, name });
   return res.status(201).json({ id: Number(ins.lastInsertRowid) });
+});
+
+router.post('/:schoolId/sessions', requireAuth, (req, res) => {
+  const schoolId = Number(req.params.schoolId);
+  if (!assertSchoolMember(schoolId, req.authUser!.id, ['school_admin'])) {
+    return res.status(403).json({ error: 'Only school administrators can configure academic sessions.' });
+  }
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const termLabel = typeof req.body?.termLabel === 'string' && req.body.termLabel.trim() ? req.body.termLabel.trim() : 'Term 1';
+  const startDate = typeof req.body?.startDate === 'string' ? req.body.startDate.trim() : '';
+  const endDate = typeof req.body?.endDate === 'string' ? req.body.endDate.trim() : '';
+  const isActive = req.body?.isActive !== false ? 1 : 0;
+
+  if (name.length < 3 || !startDate || !endDate) {
+    return res.status(400).json({ error: 'Session name, start date, and end date are required.' });
+  }
+
+  const id = db.transaction(() => {
+    if (isActive === 1) {
+      db.prepare(`UPDATE school_sessions SET is_active = 0 WHERE school_id = ?`).run(schoolId);
+    }
+    const ins = db.prepare(`
+      INSERT INTO school_sessions (school_id, name, term_label, start_date, end_date, is_active)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(schoolId, name, termLabel, startDate, endDate, isActive);
+    return Number(ins.lastInsertRowid);
+  })();
+
+  recordAudit(req.authUser!.id, 'school_session_created', 'school_session', id, req.ip || '', { schoolId, name, termLabel });
+  return res.status(201).json({ id });
+});
+
+router.get('/:schoolId/report-card/:studentUserId', requireAuth, (req, res) => {
+  const schoolId = Number(req.params.schoolId);
+  const studentUserId = Number(req.params.studentUserId);
+  const memberships = assertSchoolMember(schoolId, req.authUser!.id);
+
+  if (!memberships) {
+    recordSecurityEvent(
+      'school_cross_tenant_denied',
+      'warning',
+      req.authUser!.id,
+      req.ip || '',
+      `Unauthorized report card request for school #${schoolId}`
+    );
+    return res.status(403).json({ error: 'Access denied: not an active member of this school.' });
+  }
+
+  const isStaff = memberships.some((m) => m.member_role === 'school_admin' || m.member_role === 'teacher');
+  const isSelf = req.authUser!.id === studentUserId;
+  const isLinkedGuardian = memberships.some(
+    (m) => m.member_role === 'guardian' && m.guardian_of_student_user_id === studentUserId
+  );
+
+  if (!isStaff && !isSelf && !isLinkedGuardian) {
+    recordSecurityEvent(
+      'school_report_card_unauthorized',
+      'warning',
+      req.authUser!.id,
+      req.ip || '',
+      `User #${req.authUser!.id} blocked from reading student #${studentUserId} report card in school #${schoolId}`
+    );
+    return res.status(403).json({ error: 'You may only view your own report card, linked ward report cards, or students in your school.' });
+  }
+
+  const school = db.prepare(`SELECT id, name, school_type, country, city FROM schools WHERE id = ?`).get(schoolId);
+  const student = db.prepare(`
+    SELECT u.id, u.full_name, u.education_level, sm.class_id, c.name as class_name
+    FROM school_memberships sm
+    JOIN users u ON u.id = sm.user_id
+    LEFT JOIN school_classes c ON c.id = sm.class_id
+    WHERE sm.school_id = ? AND sm.user_id = ? AND sm.member_role = 'student' AND sm.status = 'active'
+  `).get(schoolId, studentUserId);
+
+  if (!school || !student) {
+    return res.status(404).json({ error: 'Enrolled student record not found in this school.' });
+  }
+
+  const activeSession = db.prepare(`
+    SELECT id, name, term_label, start_date, end_date FROM school_sessions
+    WHERE school_id = ? ORDER BY is_active DESC, start_date DESC LIMIT 1
+  `).get(schoolId) || null;
+
+  const subjectGrades = db.prepare(`
+    SELECT a.subject,
+           COUNT(sub.id) as assessments_count,
+           ROUND(AVG(CASE WHEN sub.status = 'graded' THEN (sub.score * 100.0 / NULLIF(a.max_score, 0)) END), 1) as avg_percent,
+           SUM(CASE WHEN sub.status = 'graded' THEN sub.score ELSE 0 END) as total_score,
+           SUM(CASE WHEN sub.status = 'graded' THEN a.max_score ELSE 0 END) as total_max
+    FROM assignment_submissions sub
+    JOIN school_assignments a ON a.id = sub.assignment_id
+    WHERE sub.school_id = ? AND sub.student_user_id = ?
+    GROUP BY a.subject
+    ORDER BY a.subject ASC
+  `).all(schoolId, studentUserId) as Array<{
+    subject: string;
+    assessments_count: number;
+    avg_percent: number | null;
+    total_score: number;
+    total_max: number;
+  }>;
+
+  const attendanceSummary = db.prepare(`
+    SELECT
+      COUNT(*) as total_days,
+      SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) as present_days,
+      SUM(CASE WHEN status = 'late' THEN 1 ELSE 0 END) as late_days,
+      SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) as absent_days,
+      SUM(CASE WHEN status = 'excused' THEN 1 ELSE 0 END) as excused_days
+    FROM school_attendance
+    WHERE school_id = ? AND student_user_id = ?
+  `).get(schoolId, studentUserId);
+
+  const gradedSubjects = subjectGrades.filter((g) => g.avg_percent !== null);
+  const overallAverage = gradedSubjects.length
+    ? Number((gradedSubjects.reduce((acc, g) => acc + Number(g.avg_percent || 0), 0) / gradedSubjects.length).toFixed(1))
+    : null;
+
+  return res.json({
+    school,
+    student,
+    activeSession,
+    overallAverage,
+    subjectGrades,
+    attendanceSummary,
+    generatedAt: new Date().toISOString(),
+  });
 });
 
 router.post('/:schoolId/classes', requireAuth, (req, res) => {

@@ -6,13 +6,16 @@ import path from 'node:path';
 const dataDir = path.resolve(process.cwd(), 'data');
 const backupsDir = path.join(dataDir, 'backups');
 const uploadsDir = path.join(dataDir, 'uploads');
+const privateAssetsDir = path.join(dataDir, 'private_assets');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+if (!fs.existsSync(privateAssetsDir)) fs.mkdirSync(privateAssetsDir, { recursive: true, mode: 0o700 });
 
 export const DB_PATH = path.join(dataDir, 'ifiok_en.db');
 export const BACKUPS_DIR = backupsDir;
 export const UPLOADS_DIR = uploadsDir;
+export const PRIVATE_ASSETS_DIR = privateAssetsDir;
 
 export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
@@ -591,6 +594,20 @@ export function initDatabase() {
   ensureColumn('products', 'supplier_id', 'INTEGER');
   ensureColumn('products', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('products', 'review_notes', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('products', 'lifecycle_status', "TEXT NOT NULL DEFAULT 'submitted'");
+  ensureColumn('products', 'file_storage_key', "TEXT DEFAULT ''");
+  ensureColumn('products', 'file_original_name', "TEXT DEFAULT ''");
+  ensureColumn('products', 'file_format', "TEXT DEFAULT ''");
+  ensureColumn('products', 'file_size_bytes', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('products', 'file_sha256', "TEXT DEFAULT ''");
+  ensureColumn('products', 'malware_scan_status', "TEXT NOT NULL DEFAULT 'not_uploaded'");
+  ensureColumn('products', 'version', "TEXT NOT NULL DEFAULT '1.0.0'");
+  ensureColumn('products', 'preview_images_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('products', 'support_info', "TEXT DEFAULT ''");
+  ensureColumn('products', 'creator_ownership_attested', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('products', 'license_verified_at', 'TEXT');
+  ensureColumn('products', 'file_verified_at', 'TEXT');
+  ensureColumn('products', 'download_count', 'INTEGER NOT NULL DEFAULT 0');
 
   ensureColumn('courses', 'image_url', "TEXT DEFAULT ''");
   ensureColumn('courses', 'source_origin', "TEXT NOT NULL DEFAULT 'Authorized Educational Material'");
@@ -616,6 +633,11 @@ export function initDatabase() {
   ensureColumn('courses', 'completeness_score', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('courses', 'moderation_action', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('courses', 'review_notes', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('courses', 'workbooks_exercises_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('courses', 'exam_questions_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('courses', 'answer_keys_text', "TEXT DEFAULT ''");
+  ensureColumn('courses', 'target_audience', "TEXT DEFAULT ''");
+  ensureColumn('courses', 'course_files_json', "TEXT NOT NULL DEFAULT '[]'");
 
   ensureColumn('business_profiles', 'source_origin', "TEXT NOT NULL DEFAULT 'Verified Business Submission'");
   ensureColumn('business_profiles', 'source_url', "TEXT DEFAULT ''");
@@ -746,9 +768,45 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS product_downloads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      order_id INTEGER,
+      ip_address TEXT DEFAULT '',
+      downloaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS course_downloads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      course_id INTEGER NOT NULL,
+      file_key TEXT NOT NULL,
+      ip_address TEXT DEFAULT '',
+      downloaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS school_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      term_label TEXT DEFAULT 'Term 1',
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE
+    );
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_txid_unique ON payments(txid) WHERE txid IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_idempotency ON orders(idempotency_key) WHERE idempotency_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_pi_testnet_payments_status ON pi_testnet_payments(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_product_downloads_prod ON product_downloads(product_id, downloaded_at);
+    CREATE INDEX IF NOT EXISTS idx_school_sessions_school ON school_sessions(school_id, is_active);
   `);
 
   const seedRoles = [
@@ -774,11 +832,13 @@ export function initDatabase() {
     insertRole.run(r.slug, r.name, r.description, JSON.stringify(r.permissions));
   }
 
-  // Non-destructive branding migration for existing rows
+  // Non-destructive branding & lifecycle migration for existing rows
   db.exec(`
     UPDATE courses SET issuing_organization = 'IFIOK SCHOOL' WHERE issuing_organization = 'IFIOK Academy';
     UPDATE schools SET accreditation_note = replace(accreditation_note, 'IFIOK Academy', 'IFIOK SCHOOL') WHERE accreditation_note LIKE '%IFIOK Academy%';
     UPDATE roles SET description = 'IFIOK SCHOOL enrolment, IFIOK Professor tutoring, exams, and verifiable certificates' WHERE slug = 'student';
+    UPDATE products SET lifecycle_status = 'published' WHERE approval_status = 'approved' AND lifecycle_status = 'submitted';
+    UPDATE products SET lifecycle_status = 'suspended' WHERE approval_status = 'rejected' AND moderation_action = 'suspended' AND lifecycle_status = 'submitted';
   `);
 
   const defaultSettings: Array<[string, string]> = [

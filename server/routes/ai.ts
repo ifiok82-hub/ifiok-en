@@ -1,15 +1,24 @@
+import path from 'node:path';
 import { Router } from 'express';
 import { db, getSettingsMap } from '../db.ts';
 import {
   ACADEMIC_SUBJECTS,
   AiGuardError,
+  explainUploadedDocument,
   generateStructuredPracticeQuiz,
+  generateStudyRecommendations,
   getAiProviderStatus,
+  markStudentAnswer,
   runProfessorCompletion,
   SUPPORTED_AI_LANGUAGES,
   testAiProviderConnection,
 } from '../lib/aiProvider.ts';
-import { decryptSensitive } from '../lib/crypto.ts';
+import {
+  containsMaliciousScriptSignature,
+  decryptSensitive,
+  detectSafeDigitalFile,
+  extractReadableDocumentText,
+} from '../lib/crypto.ts';
 import {
   recordAudit,
   recordSecurityEvent,
@@ -96,6 +105,7 @@ router.post('/chat', requireAuth, async (req, res) => {
     'practice_quiz',
     'exam_prep',
     'study_plan',
+    'code_stem',
     'teacher_prep',
   ]);
   const mode = allowedModes.has(req.body?.mode) ? req.body.mode : 'tutor';
@@ -167,6 +177,7 @@ router.post('/chat', requireAuth, async (req, res) => {
   try {
     const result = await runProfessorCompletion({
       userId: req.authUser!.id,
+      userRoles: req.authUser!.roles,
       schoolId,
       ageGroup: profile.age_group,
       educationLevel: profile.education_level,
@@ -298,6 +309,197 @@ router.post('/practice-quiz', requireAuth, async (req, res) => {
       return res.status(err.statusCode).json({ error: err.message });
     }
     return res.status(502).json({ error: err instanceof Error ? err.message : 'Quiz generation failed.' });
+  }
+});
+
+router.post('/mark-answer', requireAuth, async (req, res) => {
+  const subject = typeof req.body?.subject === 'string' && req.body.subject.trim() ? req.body.subject.trim() : 'General Studies';
+  const question = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+  const markingGuide = typeof req.body?.markingGuide === 'string' ? req.body.markingGuide.trim() : '';
+  const studentAnswer = typeof req.body?.studentAnswer === 'string' ? req.body.studentAnswer.trim() : '';
+  const maxScore = Number(req.body?.maxScore) || 10;
+  const languageCode = typeof req.body?.languageCode === 'string' && SUPPORTED_AI_LANGUAGES.some((l) => l.code === req.body.languageCode)
+    ? req.body.languageCode
+    : 'en';
+
+  if (question.length < 5 || studentAnswer.length < 2) {
+    return res.status(400).json({ error: 'Please provide both the question and the student answer to mark.' });
+  }
+
+  const profile = getUserSafetyProfile(req.authUser!.id);
+  try {
+    const out = await markStudentAnswer({
+      userId: req.authUser!.id,
+      userRoles: req.authUser!.roles,
+      ageGroup: profile.age_group,
+      educationLevel: profile.education_level,
+      guardianConsentVerified: profile.guardian_consent_verified,
+      languageCode,
+      subject,
+      question,
+      markingGuide,
+      studentAnswer,
+      maxScore,
+    });
+    return res.json({
+      feedback: out.reply,
+      provider: out.provider,
+      model: out.model,
+      latencyMs: out.latencyMs,
+    });
+  } catch (err) {
+    if (err instanceof AiGuardError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    return res.status(502).json({ error: err instanceof Error ? err.message : 'Answer marking failed.' });
+  }
+});
+
+router.post('/explain-document', requireAuth, async (req, res) => {
+  const subject = typeof req.body?.subject === 'string' && req.body.subject.trim() ? req.body.subject.trim() : 'General Studies';
+  const languageCode = typeof req.body?.languageCode === 'string' && SUPPORTED_AI_LANGUAGES.some((l) => l.code === req.body.languageCode)
+    ? req.body.languageCode
+    : 'en';
+  const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction.trim().slice(0, 500) : '';
+  const fileName = typeof req.body?.fileName === 'string' ? path.basename(req.body.fileName.trim()) : '';
+  const rawBase64 = typeof req.body?.fileBase64 === 'string' ? req.body.fileBase64.trim() : '';
+  let documentText = typeof req.body?.documentText === 'string' ? req.body.documentText.trim() : '';
+
+  if (rawBase64) {
+    const cleaned = rawBase64.replace(/^data:[^;]+;base64,/, '');
+    let buf: Buffer;
+    try {
+      buf = Buffer.from(cleaned, 'base64');
+    } catch {
+      return res.status(400).json({ error: 'Invalid base64 document payload.' });
+    }
+    if (buf.length === 0 || buf.length > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Uploaded document must be under 5 MB.' });
+    }
+    const detected = detectSafeDigitalFile(buf, fileName || 'notes.txt');
+    if (!detected || !['pdf', 'txt', 'md', 'csv'].includes(detected.ext)) {
+      return res.status(400).json({ error: 'Supported document formats for instant AI analysis are .pdf, .txt, .md, and .csv.' });
+    }
+    if (containsMaliciousScriptSignature(buf)) {
+      return res.status(400).json({ error: 'Document rejected due to embedded active script patterns.' });
+    }
+    const extracted = extractReadableDocumentText(buf, detected.ext);
+    if (extracted.length < 20) {
+      return res.status(400).json({
+        error: 'Could not extract selectable text from this PDF (it may be a scanned image). Please paste the text notes directly.',
+      });
+    }
+    documentText = extracted;
+  }
+
+  if (documentText.length < 20 || documentText.length > 15000) {
+    return res.status(400).json({ error: 'Provide document text or upload a text-readable PDF/notes file (20–15,000 characters).' });
+  }
+
+  const profile = getUserSafetyProfile(req.authUser!.id);
+  try {
+    const out = await explainUploadedDocument({
+      userId: req.authUser!.id,
+      userRoles: req.authUser!.roles,
+      ageGroup: profile.age_group,
+      educationLevel: profile.education_level,
+      guardianConsentVerified: profile.guardian_consent_verified,
+      languageCode,
+      subject,
+      fileName,
+      documentText,
+      instruction,
+    });
+    return res.json({
+      explanation: out.reply,
+      extractedCharacters: documentText.length,
+      provider: out.provider,
+      model: out.model,
+      latencyMs: out.latencyMs,
+    });
+  } catch (err) {
+    if (err instanceof AiGuardError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    return res.status(502).json({ error: err instanceof Error ? err.message : 'Document explanation failed.' });
+  }
+});
+
+router.get('/recommendations', requireAuth, async (req, res) => {
+  const uid = req.authUser!.id;
+  const languageCode = typeof req.query.languageCode === 'string' && SUPPORTED_AI_LANGUAGES.some((l) => l.code === req.query.languageCode)
+    ? req.query.languageCode
+    : 'en';
+
+  const enrolments = db.prepare(`
+    SELECT c.title, c.subject, c.category, e.progress_percent, e.status
+    FROM enrolments e JOIN courses c ON c.id = e.course_id
+    WHERE e.user_id = ?
+    ORDER BY e.enrolled_at DESC LIMIT 10
+  `).all(uid) as Array<{ title: string; subject: string; category: string; progress_percent: number; status: string }>;
+
+  const submissions = db.prepare(`
+    SELECT a.title, a.subject, a.max_score, sub.score, sub.status
+    FROM assignment_submissions sub
+    JOIN school_assignments a ON a.id = sub.assignment_id
+    WHERE sub.student_user_id = ?
+    ORDER BY sub.submitted_at DESC LIMIT 12
+  `).all(uid) as Array<{ title: string; subject: string; max_score: number; score: number | null; status: string }>;
+
+  const recentTopics = db.prepare(`
+    SELECT subject, title, mode, created_at
+    FROM ai_tutor_sessions WHERE user_id = ?
+    ORDER BY updated_at DESC LIMIT 6
+  `).all(uid) as Array<{ subject: string; title: string; mode: string; created_at: string }>;
+
+  const snapshot = {
+    enrolledCoursesCount: enrolments.length,
+    submissionsCount: submissions.length,
+    recentSessionsCount: recentTopics.length,
+    enrolments,
+    submissions,
+    recentTopics,
+  };
+
+  if (enrolments.length === 0 && submissions.length === 0 && recentTopics.length === 0) {
+    return res.json({
+      snapshot,
+      recommendationsText:
+        'No course enrolments, graded assignments, or AI study sessions recorded yet. Start by asking IFIOK Professor a question or enrolling in a course in IFIOK SCHOOL to receive tailored study recommendations.',
+      aiGenerated: false,
+    });
+  }
+
+  const profile = getUserSafetyProfile(uid);
+  const summaryText = [
+    `Course Enrolments: ${enrolments.map((e) => `${e.title} (${e.subject || e.category}, ${e.progress_percent}%, ${e.status})`).join('; ') || 'None'}`,
+    `School Assignment Scores: ${submissions.map((s) => `${s.title} (${s.subject}: ${s.score ?? 'pending'}/${s.max_score})`).join('; ') || 'None'}`,
+    `Recent Tutoring Sessions: ${recentTopics.map((t) => `${t.subject} - ${t.title}`).join('; ') || 'None'}`,
+  ].join('\n');
+
+  try {
+    const out = await generateStudyRecommendations({
+      userId: uid,
+      userRoles: req.authUser!.roles,
+      ageGroup: profile.age_group,
+      educationLevel: profile.education_level,
+      guardianConsentVerified: profile.guardian_consent_verified,
+      languageCode,
+      progressSummary: summaryText,
+    });
+    return res.json({
+      snapshot,
+      recommendationsText: out.reply,
+      provider: out.provider,
+      model: out.model,
+      aiGenerated: true,
+    });
+  } catch (err) {
+    return res.json({
+      snapshot,
+      recommendationsText: err instanceof AiGuardError ? err.message : 'AI provider is not configured for live study plan generation yet; see your real recorded progress metrics above.',
+      aiGenerated: false,
+    });
   }
 });
 

@@ -6,6 +6,7 @@ import { BACKUPS_DIR, db, getSettingsMap } from '../db.ts';
 import {
   evaluateCourseCompleteness,
   MARKET_SUITE_IDS,
+  PRODUCT_LIFECYCLE_STATES,
   validateSupplierFeedUrl,
 } from '../lib/courseCompleteness.ts';
 import { encryptSensitive, sanitizeHttpUrl } from '../lib/crypto.ts';
@@ -73,6 +74,7 @@ router.get('/overview', (_req, res) => {
     completedPaymentsCount: (db.prepare(`SELECT COUNT(*) as c FROM payments WHERE status = 'completed'`).get() as { c: number }).c,
     completedVolumePi: (db.prepare(`SELECT COALESCE(SUM(amount_pi), 0) as s FROM payments WHERE status = 'completed'`).get() as { s: number }).s,
     totalCommissionPi: (db.prepare(`SELECT COALESCE(SUM(platform_fee_pi), 0) as s FROM orders WHERE status IN ('paid', 'fulfilled')`).get() as { s: number }).s,
+    totalDigitalDownloads: (db.prepare(`SELECT COUNT(*) as c FROM product_downloads`).get() as { c: number }).c,
   };
 
   const users = db.prepare(`
@@ -117,9 +119,14 @@ router.get('/overview', (_req, res) => {
   `).all();
   const products = db.prepare(`
     SELECT p.id, p.seller_id, p.title, p.category, p.market_suite, p.product_type, p.description, p.price_pi,
-           p.stock_qty, p.image_url, p.approval_status, p.source_origin, p.source_url, p.distribution_permission,
+           p.stock_qty, p.image_url, p.approval_status, p.lifecycle_status, p.file_original_name, p.file_format,
+           p.file_size_bytes, p.file_sha256, p.malware_scan_status, p.version, p.support_info,
+           p.creator_ownership_attested, p.license_verified_at, p.file_verified_at, p.download_count,
+           p.source_origin, p.source_url, p.distribution_permission,
            p.delivery_method, p.refund_support_terms, p.availability_status, p.last_verified_at,
-           p.moderation_action, p.review_notes, p.created_at, s.store_name
+           p.moderation_action, p.review_notes, p.created_at,
+           (CASE WHEN length(COALESCE(p.file_storage_key, '')) > 0 THEN 1 ELSE 0 END) as has_file,
+           s.store_name
     FROM products p JOIN sellers s ON s.id = p.seller_id ORDER BY p.created_at DESC
   `).all();
   const opportunities = db.prepare(`
@@ -173,6 +180,15 @@ router.get('/overview', (_req, res) => {
     ORDER BY sc.created_at DESC
   `).all();
 
+  const digitalDownloads = db.prepare(`
+    SELECT pd.id, pd.product_id, pd.user_id, pd.order_id, pd.ip_address, pd.downloaded_at,
+           p.title as product_title, p.file_format, u.full_name as user_name, u.email as user_email
+    FROM product_downloads pd
+    JOIN products p ON p.id = pd.product_id
+    JOIN users u ON u.id = pd.user_id
+    ORDER BY pd.downloaded_at DESC LIMIT 60
+  `).all();
+
   let backupFiles: string[] = [];
   if (fs.existsSync(BACKUPS_DIR)) {
     backupFiles = fs.readdirSync(BACKUPS_DIR).filter((f) => f.endsWith('.db') || f.endsWith('.json')).sort().reverse();
@@ -195,6 +211,7 @@ router.get('/overview', (_req, res) => {
     transactions,
     piTestnetPayments,
     entitlements,
+    digitalDownloads,
     supplierIntegrations,
     subscriptions,
     disputes,
@@ -316,10 +333,10 @@ router.patch('/courses/:id', requireRole('super_admin', 'moderator'), (req, res)
 
   const completeness = evaluateCourseCompleteness(course, { credentials: course.instructor_credentials });
 
-  // Mandatory 15-point curriculum gate for any paid course before live approval
+  // Mandatory 22-point curriculum gate for any paid course before live approval
   if (mapped.dbStatus === 'approved' && Number(course.price_pi) > 0 && !completeness.complete) {
     return res.status(400).json({
-      error: `Paid IFIOK SCHOOL courses require all 15 curriculum components before approval (${completeness.score}/15 complete). Missing: ${completeness.missing.slice(0, 4).join('; ')}${completeness.missing.length > 4 ? ` (+${completeness.missing.length - 4} more)` : ''}.`,
+      error: `Paid IFIOK SCHOOL courses require all ${completeness.total} curriculum components before approval (${completeness.score}/${completeness.total} complete). Missing: ${completeness.missing.slice(0, 4).join('; ')}${completeness.missing.length > 4 ? ` (+${completeness.missing.length - 4} more)` : ''}.`,
       completeness,
     });
   }
@@ -377,31 +394,126 @@ router.patch('/sellers/:id', requireRole('super_admin', 'moderator'), (req, res)
 
 router.patch('/products/:id', requireRole('super_admin', 'moderator'), (req, res) => {
   const id = Number(req.params.id);
-  const mapped = mapApprovalAction(req.body?.moderationAction || req.body?.approvalStatus, 'approval');
   const reviewNotes = typeof req.body?.reviewNotes === 'string' ? req.body.reviewNotes.trim().slice(0, 500) : '';
-  if (!mapped) return res.status(400).json({ error: 'Invalid product moderation action.' });
+  const requestedLifecycle = typeof req.body?.lifecycleStatus === 'string' ? req.body.lifecycleStatus.trim() : '';
+  const actionShortcut = typeof req.body?.moderationAction === 'string' ? req.body.moderationAction.trim() : '';
 
   const row = db.prepare(`
-    SELECT p.title, s.user_id as seller_user_id FROM products p JOIN sellers s ON s.id = p.seller_id WHERE p.id = ?
-  `).get(id) as { title: string; seller_user_id: number } | undefined;
+    SELECT p.title, p.lifecycle_status, p.availability_status, p.file_storage_key, p.product_type, p.license_verified_at, p.file_verified_at, s.user_id as seller_user_id
+    FROM products p JOIN sellers s ON s.id = p.seller_id WHERE p.id = ?
+  `).get(id) as
+    | {
+        title: string;
+        lifecycle_status: string;
+        availability_status: string;
+        file_storage_key: string;
+        product_type: string;
+        license_verified_at: string | null;
+        file_verified_at: string | null;
+        seller_user_id: number;
+      }
+    | undefined;
   if (!row) return res.status(404).json({ error: 'Product not found.' });
+
+  let nextLifecycle = row.lifecycle_status || 'submitted';
+  let nextApprovalStatus = 'pending';
+  let nextModerationAction = '';
+  let nextAvailability = row.availability_status || 'available';
+  let licenseVerifiedAt = row.license_verified_at;
+  let fileVerifiedAt = row.file_verified_at;
+  let label = '';
+
+  if (requestedLifecycle && (PRODUCT_LIFECYCLE_STATES as readonly string[]).includes(requestedLifecycle)) {
+    nextLifecycle = requestedLifecycle;
+  } else if (actionShortcut === 'verify_license') {
+    nextLifecycle = 'awaiting_file_verification';
+    licenseVerifiedAt = new Date().toISOString();
+    label = 'awaiting_file_verification';
+  } else if (actionShortcut === 'verify_file_and_publish') {
+    nextLifecycle = 'published';
+    fileVerifiedAt = new Date().toISOString();
+    licenseVerifiedAt = licenseVerifiedAt || fileVerifiedAt;
+    label = 'published';
+  } else {
+    const mapped = mapApprovalAction(req.body?.moderationAction || req.body?.approvalStatus, 'approval');
+    if (!mapped) return res.status(400).json({ error: 'Invalid product moderation or lifecycle action.' });
+    nextApprovalStatus = mapped.dbStatus;
+    nextModerationAction = mapped.moderationAction;
+    label = mapped.label;
+    if (mapped.dbStatus === 'approved') {
+      nextLifecycle = 'published';
+      licenseVerifiedAt = licenseVerifiedAt || new Date().toISOString();
+      fileVerifiedAt = fileVerifiedAt || new Date().toISOString();
+    } else if (mapped.moderationAction === 'suspended') {
+      nextLifecycle = 'suspended';
+    } else if (mapped.dbStatus === 'rejected') {
+      nextLifecycle = 'archived';
+    } else {
+      nextLifecycle = 'awaiting_license_verification';
+    }
+  }
+
+  if (nextLifecycle === 'published' || nextLifecycle === 'approved') {
+    nextApprovalStatus = 'approved';
+    nextModerationAction = 'approved';
+    nextAvailability = nextAvailability === 'out_of_stock' ? 'available' : nextAvailability;
+    licenseVerifiedAt = licenseVerifiedAt || new Date().toISOString();
+    fileVerifiedAt = fileVerifiedAt || new Date().toISOString();
+    label = label || nextLifecycle;
+  } else if (nextLifecycle === 'awaiting_file_verification') {
+    nextApprovalStatus = 'pending';
+    nextModerationAction = '';
+    licenseVerifiedAt = licenseVerifiedAt || new Date().toISOString();
+    label = label || 'awaiting_file_verification';
+  } else if (['draft', 'submitted', 'awaiting_license_verification'].includes(nextLifecycle)) {
+    nextApprovalStatus = 'pending';
+    nextModerationAction = nextLifecycle === 'awaiting_license_verification' ? 'correction_requested' : '';
+    label = label || nextLifecycle;
+  } else if (nextLifecycle === 'suspended') {
+    nextApprovalStatus = 'rejected';
+    nextModerationAction = 'suspended';
+    label = 'suspended';
+  } else if (nextLifecycle === 'out_of_stock') {
+    nextApprovalStatus = 'approved';
+    nextAvailability = 'out_of_stock';
+    label = 'out_of_stock';
+  } else if (nextLifecycle === 'archived') {
+    nextApprovalStatus = 'rejected';
+    nextModerationAction = 'rejected';
+    label = 'archived';
+  }
 
   db.prepare(`
     UPDATE products
-    SET approval_status = ?, moderation_action = ?, review_notes = ?,
-        last_verified_at = CASE WHEN ? = 'approved' THEN datetime('now') ELSE last_verified_at END
+    SET approval_status = ?, lifecycle_status = ?, moderation_action = ?, review_notes = ?,
+        availability_status = ?, license_verified_at = ?, file_verified_at = ?,
+        last_verified_at = CASE WHEN ? IN ('approved', 'published') THEN datetime('now') ELSE last_verified_at END
     WHERE id = ?
-  `).run(mapped.dbStatus, mapped.moderationAction, reviewNotes, mapped.dbStatus, id);
+  `).run(
+    nextApprovalStatus,
+    nextLifecycle,
+    nextModerationAction,
+    reviewNotes,
+    nextAvailability,
+    licenseVerifiedAt,
+    fileVerifiedAt,
+    nextLifecycle,
+    id
+  );
 
   createNotification(
     row.seller_user_id,
     'market',
-    'Marketplace Listing Updated',
-    `Product "${row.title}" status is now ${mapped.label}.${reviewNotes ? ` Review notes: ${reviewNotes}` : ''}`,
+    'IFIOK DIGITAL Listing Updated',
+    `Product "${row.title}" lifecycle is now "${nextLifecycle}".${reviewNotes ? ` Review notes: ${reviewNotes}` : ''}`,
     'market'
   );
-  recordAudit(req.authUser!.id, 'product_moderation', 'product', id, req.ip || '', { status: mapped.label, reviewNotes });
-  res.json({ ok: true, status: mapped.label });
+  recordAudit(req.authUser!.id, 'product_moderation', 'product', id, req.ip || '', {
+    status: label,
+    lifecycleStatus: nextLifecycle,
+    reviewNotes,
+  });
+  res.json({ ok: true, status: label, lifecycleStatus: nextLifecycle, approvalStatus: nextApprovalStatus });
 });
 
 router.patch('/products/:id/availability', requireRole('super_admin', 'moderator'), (req, res) => {
@@ -906,12 +1018,24 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
       seller = { id: Number(sRes.lastInsertRowid) };
     }
 
+    const version = typeof req.body?.version === 'string' && req.body.version.trim() ? req.body.version.trim().slice(0, 40) : '1.0.0';
+    const supportInfo = typeof req.body?.supportInfo === 'string' ? req.body.supportInfo.trim().slice(0, 300) : '';
+    const fileStorageKey = typeof req.body?.fileStorageKey === 'string' ? req.body.fileStorageKey.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 120) : '';
+    const fileOriginalName = typeof req.body?.fileOriginalName === 'string' ? req.body.fileOriginalName.trim().slice(0, 180) : '';
+    const fileFormat = typeof req.body?.fileFormat === 'string' ? req.body.fileFormat.trim().slice(0, 20) : '';
+    const fileSizeBytes = Math.max(0, Number(req.body?.fileSizeBytes) || 0);
+    const fileSha256 = typeof req.body?.fileSha256 === 'string' ? req.body.fileSha256.trim().slice(0, 80) : '';
+    const malwareScanStatus = fileStorageKey ? 'clean_verified' : 'not_uploaded';
+
     const ins = db.prepare(`
       INSERT INTO products (
         seller_id, title, category, market_suite, product_type, description, price_pi, stock_qty,
-        image_url, approval_status, source_origin, source_url, distribution_permission,
+        image_url, approval_status, lifecycle_status,
+        file_storage_key, file_original_name, file_format, file_size_bytes, file_sha256, malware_scan_status,
+        version, support_info, creator_ownership_attested, license_verified_at, file_verified_at,
+        source_origin, source_url, distribution_permission,
         delivery_method, refund_support_terms, availability_status, last_verified_at, locked_content_enc
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'published', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       seller.id,
       title,
@@ -922,6 +1046,16 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
       pricePi,
       stockQty,
       imageUrl,
+      fileStorageKey,
+      fileOriginalName,
+      fileFormat,
+      fileSizeBytes,
+      fileSha256,
+      malwareScanStatus,
+      version,
+      supportInfo || refundSupportTerms,
+      nowIso,
+      nowIso,
       sourceOrigin,
       sourceUrl,
       distributionPermission,
@@ -931,8 +1065,12 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
       nowIso,
       encryptSensitive(lockedContent)
     );
-    recordAudit(req.authUser!.id, 'verified_product_imported', 'product', Number(ins.lastInsertRowid), req.ip || '', { sourceOrigin, marketSuite });
-    return res.status(201).json({ id: Number(ins.lastInsertRowid), entityType, lastVerifiedAt: nowIso });
+    recordAudit(req.authUser!.id, 'verified_product_imported', 'product', Number(ins.lastInsertRowid), req.ip || '', {
+      sourceOrigin,
+      marketSuite,
+      hasFile: Boolean(fileStorageKey),
+    });
+    return res.status(201).json({ id: Number(ins.lastInsertRowid), entityType, lifecycleStatus: 'published', lastVerifiedAt: nowIso });
   }
 
   if (entityType === 'course') {
@@ -959,6 +1097,19 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
       : [];
     const quizzes = Array.isArray(req.body?.quizzes)
       ? req.body.quizzes.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
+      : [];
+    const workbooksExercises = Array.isArray(req.body?.workbooksExercises)
+      ? req.body.workbooksExercises.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
+      : [];
+    const examQuestions = Array.isArray(req.body?.examQuestions)
+      ? req.body.examQuestions.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 30)
+      : [];
+    const answerKeysText = typeof req.body?.answerKeysText === 'string' ? req.body.answerKeysText.trim() : '';
+    const targetAudience = typeof req.body?.targetAudience === 'string' ? req.body.targetAudience.trim() : '';
+    const courseFiles = Array.isArray(req.body?.courseFiles)
+      ? req.body.courseFiles
+          .filter((f: unknown) => f && typeof f === 'object' && typeof (f as { storageKey?: unknown }).storageKey === 'string')
+          .slice(0, 12)
       : [];
     const examMarkingGuide = typeof req.body?.examMarkingGuide === 'string' ? req.body.examMarkingGuide.trim() : '';
     const mediaLessonUrl = sanitizeHttpUrl(req.body?.mediaLessonUrl);
@@ -991,20 +1142,27 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
       {
         title,
         description,
+        subject,
+        category,
         syllabus_json: syllabus,
         learning_objectives_json: learningObjectives,
         modules_notes_json: modulesNotes,
         media_lesson_url: mediaLessonUrl,
         locked_materials_enc: encryptedMaterials,
         slides_resources_json: slidesResources,
+        course_files_json: courseFiles,
+        workbooks_exercises_json: workbooksExercises,
         assignments_json: assignments,
         quizzes_json: quizzes,
+        exam_questions_json: examQuestions,
+        answer_keys_text: answerKeysText,
         exam_marking_guide: examMarkingGuide,
         instructor_qualifications_snapshot: instructorQual || instructor.credentials,
         duration_hours: durationHours,
         level,
         language_code: languageCode,
         prerequisites,
+        target_audience: targetAudience,
         copyright_permission: copyrightPermission,
         certificate_criteria: certificateCriteria,
       },
@@ -1013,7 +1171,7 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
 
     if (pricePi > 0 && !completeness.complete) {
       return res.status(400).json({
-        error: `Paid course import blocked: all 15 curriculum requirements must be populated (${completeness.score}/15).`,
+        error: `Paid course import blocked: all ${completeness.total} curriculum requirements must be populated (${completeness.score}/${completeness.total}).`,
         completeness,
       });
     }
@@ -1021,12 +1179,13 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
     const slug = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50)}-${crypto.randomBytes(3).toString('hex')}`;
     const ins = db.prepare(`
       INSERT INTO courses (
-        instructor_id, title, slug, category, subject, language_code, level, duration_hours, price_pi,
+        instructor_id, title, slug, category, subject, language_code, issuing_organization, level, duration_hours, price_pi,
         syllabus_json, description, learning_objectives_json, modules_notes_json, media_lesson_url,
-        slides_resources_json, assignments_json, quizzes_json, exam_marking_guide,
-        instructor_qualifications_snapshot, prerequisites, copyright_permission, certificate_criteria, completeness_score,
+        slides_resources_json, workbooks_exercises_json, assignments_json, quizzes_json, exam_questions_json, answer_keys_text,
+        exam_marking_guide, instructor_qualifications_snapshot, prerequisites, target_audience, copyright_permission,
+        certificate_criteria, course_files_json, completeness_score,
         image_url, approval_status, is_featured, source_origin, source_url, availability_status, last_verified_at, locked_materials_enc
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 1, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'IFIOK SCHOOL', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 1, ?, ?, ?, ?, ?)
     `).run(
       instructor.id,
       title,
@@ -1043,13 +1202,18 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
       JSON.stringify(modulesNotes),
       mediaLessonUrl,
       JSON.stringify(slidesResources),
+      JSON.stringify(workbooksExercises),
       JSON.stringify(assignments),
       JSON.stringify(quizzes),
+      JSON.stringify(examQuestions),
+      answerKeysText,
       examMarkingGuide,
       instructorQual || instructor.credentials,
       prerequisites,
+      targetAudience,
       copyrightPermission,
       certificateCriteria,
+      JSON.stringify(courseFiles),
       completeness.score,
       imageUrl,
       sourceOrigin,
@@ -1147,6 +1311,105 @@ router.post('/import-verified', requireRole('super_admin'), (req, res) => {
   );
   recordAudit(req.authUser!.id, 'verified_opportunity_imported', 'opportunity', Number(ins.lastInsertRowid), req.ip || '', { sourceOrigin });
   return res.status(201).json({ id: Number(ins.lastInsertRowid), entityType, lastVerifiedAt: nowIso });
+});
+
+// Batch Verified IFIOK DIGITAL Import (Admin-only, enforces provenance & license per item)
+router.post('/import-verified-batch', requireRole('super_admin'), (req, res) => {
+  const rawItems = Array.isArray(req.body?.items) ? req.body.items.slice(0, 100) : [];
+  if (rawItems.length === 0) {
+    return res.status(400).json({ error: 'Provide an items array (1-100 verified digital items).' });
+  }
+
+  let seller = db.prepare(`SELECT id FROM sellers WHERE user_id = ?`).get(req.authUser!.id) as { id: number } | undefined;
+  if (!seller) {
+    const sRes = db.prepare(`
+      INSERT INTO sellers (user_id, store_name, description, country, verification_status)
+      VALUES (?, 'IFIOK-EN Verified Inventory', 'Official platform-verified inventory and authorized supplier catalog.', 'Global', 'verified')
+    `).run(req.authUser!.id);
+    seller = { id: Number(sRes.lastInsertRowid) };
+  }
+
+  const nowIso = new Date().toISOString();
+  let imported = 0;
+  const skipped: Array<{ index: number; reason: string }> = [];
+
+  db.transaction(() => {
+    rawItems.forEach((entry: unknown, index: number) => {
+      if (!entry || typeof entry !== 'object') {
+        skipped.push({ index, reason: 'Invalid object' });
+        return;
+      }
+      const item = entry as Record<string, unknown>;
+      const title = typeof item.title === 'string' ? item.title.trim() : '';
+      const description = typeof item.description === 'string' ? item.description.trim() : '';
+      const pricePi = Number(item.pricePi);
+      const sourceOrigin = typeof item.sourceOrigin === 'string' ? item.sourceOrigin.trim().slice(0, 120) : '';
+      const distributionPermission = typeof item.distributionPermission === 'string' ? item.distributionPermission.trim().slice(0, 240) : '';
+      const refundSupportTerms = typeof item.refundSupportTerms === 'string' ? item.refundSupportTerms.trim().slice(0, 300) : '';
+
+      if (title.length < 3 || description.length < 15 || !Number.isFinite(pricePi) || pricePi <= 0) {
+        skipped.push({ index, reason: 'Missing valid title, description, or positive pricePi' });
+        return;
+      }
+      if (sourceOrigin.length < 3 || distributionPermission.length < 5 || refundSupportTerms.length < 8) {
+        skipped.push({ index, reason: 'Missing sourceOrigin, distributionPermission, or refundSupportTerms' });
+        return;
+      }
+
+      const category = typeof item.category === 'string' && item.category.trim() ? item.category.trim() : 'Software & Licenses';
+      const marketSuite = (MARKET_SUITE_IDS as readonly string[]).includes(String(item.marketSuite))
+        ? String(item.marketSuite)
+        : 'software_productivity';
+      const productType = ['physical', 'digital', 'service', 'web3', 'pi_app', 'gaming_asset'].includes(String(item.productType))
+        ? String(item.productType)
+        : 'digital';
+      const stockQty = Math.max(0, Number(item.stockQty) || 100);
+      const version = typeof item.version === 'string' && item.version.trim() ? item.version.trim().slice(0, 40) : '1.0.0';
+      const supportInfo = typeof item.supportInfo === 'string' && item.supportInfo.trim() ? item.supportInfo.trim().slice(0, 300) : refundSupportTerms;
+      const deliveryMethod = typeof item.deliveryMethod === 'string' && item.deliveryMethod.trim()
+        ? item.deliveryMethod.trim().slice(0, 80)
+        : 'instant_digital_download';
+      const lockedContent = typeof item.lockedContent === 'string' ? item.lockedContent.trim() : '';
+
+      db.prepare(`
+        INSERT INTO products (
+          seller_id, title, category, market_suite, product_type, description, price_pi, stock_qty,
+          image_url, approval_status, lifecycle_status, version, support_info, creator_ownership_attested,
+          license_verified_at, file_verified_at, source_origin, source_url, distribution_permission,
+          delivery_method, refund_support_terms, availability_status, last_verified_at, locked_content_enc
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'published', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        seller!.id,
+        title,
+        category,
+        marketSuite,
+        productType,
+        description,
+        pricePi,
+        stockQty,
+        sanitizeHttpUrl(item.imageUrl),
+        version,
+        supportInfo,
+        nowIso,
+        nowIso,
+        sourceOrigin,
+        sanitizeHttpUrl(item.sourceUrl),
+        distributionPermission,
+        deliveryMethod,
+        refundSupportTerms,
+        stockQty > 0 ? 'available' : 'out_of_stock',
+        nowIso,
+        encryptSensitive(lockedContent)
+      );
+      imported += 1;
+    });
+  })();
+
+  recordAudit(req.authUser!.id, 'verified_batch_imported', 'product', 'batch', req.ip || '', {
+    imported,
+    skippedCount: skipped.length,
+  });
+  return res.status(201).json({ imported, skipped });
 });
 
 export default router;

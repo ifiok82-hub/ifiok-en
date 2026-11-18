@@ -12,6 +12,20 @@ export const MARKET_SUITE_IDS = [
 
 export type MarketSuiteId = (typeof MARKET_SUITE_IDS)[number];
 
+export const PRODUCT_LIFECYCLE_STATES = [
+  'draft',
+  'submitted',
+  'awaiting_license_verification',
+  'awaiting_file_verification',
+  'approved',
+  'published',
+  'suspended',
+  'out_of_stock',
+  'archived',
+] as const;
+
+export type ProductLifecycleState = (typeof PRODUCT_LIFECYCLE_STATES)[number];
+
 export interface CourseCompletenessCheckItem {
   id: number;
   key: string;
@@ -21,7 +35,7 @@ export interface CourseCompletenessCheckItem {
 
 export interface CourseCompletenessResult {
   score: number;
-  total: 15;
+  total: 22;
   complete: boolean;
   missing: string[];
   checklist: CourseCompletenessCheckItem[];
@@ -50,8 +64,11 @@ export function evaluateCourseCompleteness(
   const objectives = parseJsonArraySafe(course.learning_objectives_json).filter((x) => String(x || '').trim().length >= 3);
   const modulesNotes = parseJsonArraySafe(course.modules_notes_json);
   const slidesResources = parseJsonArraySafe(course.slides_resources_json).filter((x) => String(x || '').trim().length >= 3);
+  const courseFiles = parseJsonArraySafe(course.course_files_json);
+  const workbooks = parseJsonArraySafe(course.workbooks_exercises_json).filter((x) => String(x || '').trim().length >= 3);
   const assignments = parseJsonArraySafe(course.assignments_json).filter((x) => String(x || '').trim().length >= 3);
   const quizzes = parseJsonArraySafe(course.quizzes_json).filter((x) => String(x || '').trim().length >= 3);
+  const examQuestions = parseJsonArraySafe(course.exam_questions_json).filter((x) => String(x || '').trim().length >= 3);
 
   const validModuleTopics = modulesNotes.filter((m) => {
     if (typeof m === 'string') return m.trim().length >= 4;
@@ -83,92 +100,134 @@ export function evaluateCourseCompleteness(
   const checklist: CourseCompletenessCheckItem[] = [
     {
       id: 1,
-      key: 'title_description',
-      label: 'Course title and detailed description',
-      present: hasText(course.title, 5) && hasText(course.description, 20),
+      key: 'course_title',
+      label: 'Course title',
+      present: hasText(course.title, 5),
     },
     {
       id: 2,
-      key: 'syllabus',
-      label: 'Course outline / syllabus',
-      present: syllabus.length >= 2,
+      key: 'course_description',
+      label: 'Detailed course description (min 30 chars)',
+      present: hasText(course.description, 30),
     },
     {
       id: 3,
-      key: 'learning_objectives',
-      label: 'Learning objectives',
-      present: objectives.length >= 2,
+      key: 'subject_classification',
+      label: 'Academic subject / category classification',
+      present: hasText(course.subject, 2) || hasText(course.category, 2),
     },
     {
       id: 4,
-      key: 'module_topics',
-      label: 'Modules and lesson topics',
-      present: validModuleTopics.length >= 2,
+      key: 'syllabus',
+      label: 'Course outline / syllabus (2+ modules)',
+      present: syllabus.length >= 2,
     },
     {
       id: 5,
+      key: 'learning_objectives',
+      label: 'Clear learning objectives (2+ items)',
+      present: objectives.length >= 2,
+    },
+    {
+      id: 6,
+      key: 'module_topics',
+      label: 'Structured modules and lesson topics (2+ topics)',
+      present: validModuleTopics.length >= 2,
+    },
+    {
+      id: 7,
       key: 'lesson_notes',
       label: 'Prepared lesson notes',
       present: validLessonNotes.length >= 1,
     },
     {
-      id: 6,
-      key: 'teaching_content',
-      label: 'Teaching videos or complete lesson content',
+      id: 8,
+      key: 'teaching_media',
+      label: 'Teaching videos or structured lesson media',
       present: hasTeachingMediaOrLessonContent,
     },
     {
-      id: 7,
-      key: 'slides_resources',
-      label: 'Slides and downloadable resources',
-      present: slidesResources.length >= 1,
-    },
-    {
-      id: 8,
-      key: 'assignments',
-      label: 'Assignments and exercises',
-      present: assignments.length >= 1,
-    },
-    {
       id: 9,
-      key: 'quizzes',
-      label: 'Quizzes and assessments',
-      present: quizzes.length >= 1,
+      key: 'downloadable_resources',
+      label: 'Downloadable PDFs, documents, or presentations/slides',
+      present: slidesResources.length >= 1 || courseFiles.length >= 1,
     },
     {
       id: 10,
-      key: 'exam_marking_guide',
-      label: 'Examination questions and marking guide',
-      present: hasText(course.exam_marking_guide, 15),
+      key: 'practical_workbooks',
+      label: 'Practical exercises and student workbooks',
+      present: workbooks.length >= 1,
     },
     {
       id: 11,
-      key: 'instructor_qualifications',
-      label: 'Verified instructor information & qualifications',
-      present: instructorQual,
+      key: 'assignments',
+      label: 'Assignments',
+      present: assignments.length >= 1,
     },
     {
       id: 12,
-      key: 'duration_level',
-      label: 'Course duration and difficulty level',
-      present: Number(course.duration_hours) >= 1 && hasText(course.level, 3),
+      key: 'quizzes',
+      label: 'Quizzes and formative assessments',
+      present: quizzes.length >= 1,
     },
     {
       id: 13,
-      key: 'language_prerequisites',
-      label: 'Language and prerequisites',
-      present: hasText(course.language_code, 2) && hasText(course.prerequisites, 3),
+      key: 'exam_questions',
+      label: 'Examination questions',
+      present: examQuestions.length >= 1,
     },
     {
       id: 14,
+      key: 'answer_keys_marking_guide',
+      label: 'Answer keys and marking guides',
+      present: hasText(course.answer_keys_text, 10) && hasText(course.exam_marking_guide, 12),
+    },
+    {
+      id: 15,
+      key: 'instructor_qualifications',
+      label: 'Verified instructor bio and qualifications',
+      present: instructorQual,
+    },
+    {
+      id: 16,
+      key: 'duration_hours',
+      label: 'Course duration (1+ hours)',
+      present: Number(course.duration_hours) >= 1,
+    },
+    {
+      id: 17,
+      key: 'difficulty_level',
+      label: 'Difficulty level specification',
+      present: hasText(course.level, 3),
+    },
+    {
+      id: 18,
+      key: 'language_code',
+      label: 'Instruction language specification',
+      present: hasText(course.language_code, 2),
+    },
+    {
+      id: 19,
+      key: 'prerequisites',
+      label: 'Course prerequisites',
+      present: hasText(course.prerequisites, 3),
+    },
+    {
+      id: 20,
+      key: 'target_audience',
+      label: 'Target audience / grade level',
+      present: hasText(course.target_audience, 3),
+    },
+    {
+      id: 21,
       key: 'copyright_permission',
       label: 'Copyright or distribution permission',
       present: hasText(course.copyright_permission, 5),
     },
     {
-      id: 15,
+      id: 22,
       key: 'certificate_criteria',
-      label: 'Completion & certificate criteria',
+      label: 'Completion requirements and certificate criteria',
       present: hasText(course.certificate_criteria, 8),
     },
   ];
@@ -177,7 +236,7 @@ export function evaluateCourseCompleteness(
   const score = checklist.length - missing.length;
   return {
     score,
-    total: 15,
+    total: 22,
     complete: missing.length === 0,
     missing,
     checklist,

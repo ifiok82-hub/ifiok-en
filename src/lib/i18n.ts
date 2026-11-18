@@ -78,22 +78,25 @@ export const TIMEZONES = [
 
 export const ACADEMIC_SUBJECTS = [
   'Mathematics',
-  'English',
-  'Science',
-  'Biology',
-  'Chemistry',
+  'English Language',
+  'Basic Science',
   'Physics',
+  'Chemistry',
+  'Biology',
   'Computer Science',
   'Programming',
   'Artificial Intelligence',
+  'Robotics',
   'Business Studies',
   'Accounting',
   'Economics',
   'Entrepreneurship',
-  'Digital Marketing',
   'Financial Literacy',
+  'Digital Marketing',
   'Web3 and Blockchain',
+  'Pi ecosystem education',
   'Professional Development',
+  'Vocational and Technical Skills',
 ] as const;
 
 export const EDUCATION_LEVELS = [
@@ -230,6 +233,33 @@ export const MARKET_SUITES = [
     ],
   },
 ] as const;
+
+export const IFIOK_DIGITAL_CATEGORIES: Array<{
+  label: string;
+  suiteId: string;
+  subcategory: string;
+}> = [
+  { label: 'E-books & Digital Textbooks', suiteId: 'digital_learning_publishing', subcategory: 'E-books' },
+  { label: 'Audiobooks & Audio Guides', suiteId: 'digital_learning_publishing', subcategory: 'Audiobooks' },
+  { label: 'Study Guides & Exam Prep Packs', suiteId: 'digital_learning_publishing', subcategory: 'Study Materials' },
+  { label: 'Digital Workbooks & Exercises', suiteId: 'digital_learning_publishing', subcategory: 'Digital Workbooks' },
+  { label: 'Training Manuals & Handbooks', suiteId: 'digital_learning_publishing', subcategory: 'Training Manuals' },
+  { label: 'Licensed Software & Desktop Apps', suiteId: 'software_productivity', subcategory: 'Licensed Software' },
+  { label: 'Website & UI Themes', suiteId: 'software_productivity', subcategory: 'Website Themes & Templates' },
+  { label: 'WordPress Themes & Plugins', suiteId: 'software_productivity', subcategory: 'WordPress Themes & Plugins' },
+  { label: 'Developer Tools, SDKs & Scripts', suiteId: 'software_productivity', subcategory: 'Developer Tools & SDKs' },
+  { label: 'Programming Starter Kits', suiteId: 'software_productivity', subcategory: 'Programming Resources' },
+  { label: 'Logo & Brand Identity Kits', suiteId: 'creative_design_assets', subcategory: 'Branding Kits' },
+  { label: 'Presentation & Pitch Decks', suiteId: 'creative_design_assets', subcategory: 'Presentation Templates' },
+  { label: 'Social Media & Graphic Templates', suiteId: 'creative_design_assets', subcategory: 'Social Media Kits' },
+  { label: 'Licensed Fonts, Icons & Stock Media', suiteId: 'creative_design_assets', subcategory: 'Licensed Fonts & Icons' },
+  { label: 'Video & Photography Presets', suiteId: 'creative_design_assets', subcategory: 'Video Editing Presets & Templates' },
+  { label: 'Business Plans & Financial Models', suiteId: 'business_resources', subcategory: 'Business-Plan Templates' },
+  { label: 'Accounting & Tax Spreadsheets', suiteId: 'business_resources', subcategory: 'Accounting Spreadsheets' },
+  { label: 'CV, Resume & Proposal Templates', suiteId: 'business_resources', subcategory: 'CV & Resume Templates' },
+  { label: 'Digital Collectibles & Creator Assets', suiteId: 'digital_collectibles', subcategory: 'Creator-Issued Digital Assets' },
+  { label: 'Web3, Pi Apps & Game-Dev Assets', suiteId: 'gaming_web3', subcategory: 'Verified Pi Ecosystem Apps & Services' },
+];
 
 export const DELIVERY_METHODS = [
   { id: 'instant_digital_download', label: 'Instant Digital Download (Vault)' },

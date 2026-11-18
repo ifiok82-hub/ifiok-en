@@ -51,6 +51,8 @@ app.use(
       : false,
   })
 );
+app.use('/api/uploads', express.json({ limit: '24mb' }));
+app.use('/api/academy/ai/explain-document', express.json({ limit: '10mb' }));
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 

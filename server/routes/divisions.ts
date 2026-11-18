@@ -56,12 +56,17 @@ router.get('/public-summary', (_req, res) => {
 
   const products = db.prepare(`
     SELECT p.id, p.seller_id, p.title, p.category, p.market_suite, p.product_type, p.description, p.price_pi, p.stock_qty,
-           p.image_url, p.approval_status, p.source_origin, p.source_url, p.distribution_permission,
+           p.image_url, p.approval_status, p.lifecycle_status, p.file_original_name, p.file_format, p.file_size_bytes,
+           p.malware_scan_status, p.version, p.preview_images_json, p.support_info, p.creator_ownership_attested, p.download_count,
+           p.source_origin, p.source_url, p.distribution_permission,
            p.delivery_method, p.refund_support_terms, p.availability_status, p.last_verified_at, p.created_at,
+           (CASE WHEN length(COALESCE(p.file_storage_key, '')) > 0 THEN 1 ELSE 0 END) as has_file,
            s.store_name, s.country as seller_country, s.verification_status as seller_verified
     FROM products p
     JOIN sellers s ON s.id = p.seller_id
-    WHERE p.approval_status = 'approved' AND s.verification_status = 'verified'
+    WHERE p.approval_status = 'approved'
+      AND COALESCE(p.lifecycle_status, 'published') IN ('approved', 'published')
+      AND s.verification_status = 'verified'
       AND COALESCE(p.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected')
     ORDER BY p.created_at DESC
     LIMIT 6
@@ -130,7 +135,9 @@ router.get('/search', (req, res) => {
   const products = db.prepare(`
     SELECT p.id, p.title, p.category as subtitle, p.price_pi as pricePi, p.source_origin, 'market' as division
     FROM products p JOIN sellers s ON s.id = p.seller_id
-    WHERE p.approval_status = 'approved' AND s.verification_status = 'verified'
+    WHERE p.approval_status = 'approved'
+      AND COALESCE(p.lifecycle_status, 'published') IN ('approved', 'published')
+      AND s.verification_status = 'verified'
       AND (LOWER(p.title) LIKE ? OR LOWER(p.description) LIKE ? OR LOWER(p.category) LIKE ?)
     LIMIT 8
   `).all(like, like, like) as Array<Record<string, unknown>>;
@@ -179,9 +186,10 @@ router.get('/courses', optionalAuth, (req, res) => {
   const rows = db.prepare(`
     SELECT c.id, c.instructor_id, c.title, c.slug, c.category, c.subject, c.language_code, c.issuing_organization, c.school_id,
            c.level, c.duration_hours, c.price_pi, c.syllabus_json, c.description, c.image_url, c.approval_status, c.is_featured,
-           c.learning_objectives_json, c.prerequisites, c.copyright_permission, c.certificate_criteria,
+           c.learning_objectives_json, c.prerequisites, c.target_audience, c.copyright_permission, c.certificate_criteria,
            c.instructor_qualifications_snapshot, c.completeness_score, c.moderation_action, c.review_notes,
            c.assignments_json, c.quizzes_json, c.slides_resources_json, c.modules_notes_json, c.media_lesson_url, c.exam_marking_guide,
+           c.workbooks_exercises_json, c.exam_questions_json, c.answer_keys_text, c.course_files_json,
            c.locked_materials_enc,
            c.source_origin, c.source_url, c.availability_status, c.last_verified_at, c.created_at,
            (CASE WHEN length(COALESCE(c.locked_materials_enc, '')) > 0 OR c.price_pi > 0 THEN 1 ELSE 0 END) as has_locked_content,
@@ -215,6 +223,10 @@ router.get('/courses', optionalAuth, (req, res) => {
         slides_resources_json: _sr,
         assignments_json: _as,
         quizzes_json: _qz,
+        workbooks_exercises_json: _wb,
+        exam_questions_json: _eq,
+        answer_keys_text: _ak,
+        course_files_json: _cf,
         exam_marking_guide: _ex,
         media_lesson_url: _mu,
         ...publicSafe
@@ -243,6 +255,14 @@ router.get('/courses', optionalAuth, (req, res) => {
         quizzes_count: (() => {
           try {
             const parsed = JSON.parse(String(row.quizzes_json || '[]'));
+            return Array.isArray(parsed) ? parsed.length : 0;
+          } catch {
+            return 0;
+          }
+        })(),
+        course_files_count: (() => {
+          try {
+            const parsed = JSON.parse(String(row.course_files_json || '[]'));
             return Array.isArray(parsed) ? parsed.length : 0;
           } catch {
             return 0;
@@ -305,18 +325,38 @@ router.post('/courses', requireAuth, (req, res) => {
   const slidesResources = Array.isArray(req.body?.slidesResources)
     ? req.body.slidesResources.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 30)
     : [];
+  const workbooksExercises = Array.isArray(req.body?.workbooksExercises)
+    ? req.body.workbooksExercises.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
+    : [];
   const assignments = Array.isArray(req.body?.assignments)
     ? req.body.assignments.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
     : [];
   const quizzes = Array.isArray(req.body?.quizzes)
     ? req.body.quizzes.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 20)
     : [];
+  const examQuestions = Array.isArray(req.body?.examQuestions)
+    ? req.body.examQuestions.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 30)
+    : [];
+  const answerKeysText = typeof req.body?.answerKeysText === 'string' ? req.body.answerKeysText.trim() : '';
   const examMarkingGuide = typeof req.body?.examMarkingGuide === 'string' ? req.body.examMarkingGuide.trim() : '';
   const mediaLessonUrl = sanitizeHttpUrl(req.body?.mediaLessonUrl);
   const instructorQualSnapshot = typeof req.body?.instructorQualifications === 'string' ? req.body.instructorQualifications.trim() : '';
   const prerequisites = typeof req.body?.prerequisites === 'string' ? req.body.prerequisites.trim() : '';
+  const targetAudience = typeof req.body?.targetAudience === 'string' ? req.body.targetAudience.trim() : '';
   const copyrightPermission = typeof req.body?.copyrightPermission === 'string' ? req.body.copyrightPermission.trim() : '';
   const certificateCriteria = typeof req.body?.certificateCriteria === 'string' ? req.body.certificateCriteria.trim() : '';
+  const courseFiles = Array.isArray(req.body?.courseFiles)
+    ? req.body.courseFiles
+        .filter((f: unknown) => f && typeof f === 'object' && typeof (f as { storageKey?: unknown }).storageKey === 'string')
+        .slice(0, 12)
+        .map((f: { storageKey: string; originalName?: string; fileFormat?: string; fileSizeBytes?: number; fileSha256?: string }) => ({
+          storageKey: String(f.storageKey).replace(/[^a-zA-Z0-9._-]/g, ''),
+          originalName: String(f.originalName || 'course-material').slice(0, 180),
+          fileFormat: String(f.fileFormat || '').slice(0, 20),
+          fileSizeBytes: Math.max(0, Number(f.fileSizeBytes) || 0),
+          fileSha256: String(f.fileSha256 || '').slice(0, 80),
+        }))
+    : [];
 
   if (title.length < 5 || description.length < 20) {
     return res.status(400).json({ error: 'Course title and detailed description are required.' });
@@ -360,30 +400,37 @@ router.post('/courses', requireAuth, (req, res) => {
     {
       title,
       description,
+      subject,
+      category,
       syllabus_json: syllabus,
       learning_objectives_json: learningObjectives,
       modules_notes_json: modulesNotes,
       media_lesson_url: mediaLessonUrl,
       locked_materials_enc: encryptedMaterials,
       slides_resources_json: slidesResources,
+      course_files_json: courseFiles,
+      workbooks_exercises_json: workbooksExercises,
       assignments_json: assignments,
       quizzes_json: quizzes,
+      exam_questions_json: examQuestions,
+      answer_keys_text: answerKeysText,
       exam_marking_guide: examMarkingGuide,
       instructor_qualifications_snapshot: instructorQualSnapshot || instructor.credentials,
       duration_hours: durationHours,
       level,
       language_code: languageCode,
       prerequisites,
+      target_audience: targetAudience,
       copyright_permission: copyrightPermission,
       certificate_criteria: certificateCriteria,
     },
     instructor
   );
 
-  // Enforce 15-point curriculum completeness before approving any paid course
+  // Enforce 22-point curriculum completeness before approving any paid course
   if (isAdmin && pricePi > 0 && !completeness.complete) {
     return res.status(400).json({
-      error: `Paid course cannot be auto-approved until all 15 curriculum requirements are complete (${completeness.score}/15).`,
+      error: `Paid course cannot be auto-approved until all ${completeness.total} curriculum requirements are complete (${completeness.score}/${completeness.total}).`,
       completeness,
     });
   }
@@ -395,10 +442,11 @@ router.post('/courses', requireAuth, (req, res) => {
       instructor_id, title, slug, category, subject, language_code, issuing_organization,
       level, duration_hours, price_pi, syllabus_json, description,
       learning_objectives_json, modules_notes_json, media_lesson_url, slides_resources_json,
-      assignments_json, quizzes_json, exam_marking_guide, instructor_qualifications_snapshot,
-      prerequisites, copyright_permission, certificate_criteria, completeness_score,
+      workbooks_exercises_json, assignments_json, quizzes_json, exam_questions_json, answer_keys_text,
+      exam_marking_guide, instructor_qualifications_snapshot,
+      prerequisites, target_audience, copyright_permission, certificate_criteria, course_files_json, completeness_score,
       image_url, approval_status, source_origin, source_url, availability_status, last_verified_at, locked_materials_enc
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)
   `).run(
     instructor.id,
     title,
@@ -416,13 +464,18 @@ router.post('/courses', requireAuth, (req, res) => {
     JSON.stringify(modulesNotes),
     mediaLessonUrl,
     JSON.stringify(slidesResources),
+    JSON.stringify(workbooksExercises),
     JSON.stringify(assignments),
     JSON.stringify(quizzes),
+    JSON.stringify(examQuestions),
+    answerKeysText,
     examMarkingGuide,
     instructorQualSnapshot || instructor.credentials || '',
     prerequisites,
+    targetAudience,
     copyrightPermission,
     certificateCriteria,
+    JSON.stringify(courseFiles),
     completeness.score,
     imageUrl,
     approvalStatus,
@@ -450,8 +503,9 @@ router.get('/courses/:id/classroom', requireAuth, async (req, res) => {
     SELECT c.id, c.title, c.category, c.subject, c.language_code, c.issuing_organization, c.level, c.duration_hours,
            c.price_pi, c.syllabus_json, c.description, c.image_url, c.approval_status, c.locked_materials_enc,
            c.learning_objectives_json, c.modules_notes_json, c.media_lesson_url, c.slides_resources_json,
-           c.assignments_json, c.quizzes_json, c.exam_marking_guide, c.instructor_qualifications_snapshot,
-           c.prerequisites, c.copyright_permission, c.certificate_criteria, c.completeness_score,
+           c.workbooks_exercises_json, c.assignments_json, c.quizzes_json, c.exam_questions_json, c.answer_keys_text,
+           c.exam_marking_guide, c.instructor_qualifications_snapshot, c.course_files_json,
+           c.prerequisites, c.target_audience, c.copyright_permission, c.certificate_criteria, c.completeness_score,
            c.moderation_action, c.review_notes,
            u.full_name as instructor_name, i.credentials as instructor_credentials, i.user_id as instructor_user_id
     FROM courses c
@@ -493,10 +547,14 @@ router.get('/courses/:id/classroom', requireAuth, async (req, res) => {
     locked_materials_enc: _omit,
     modules_notes_json,
     slides_resources_json,
+    workbooks_exercises_json,
     assignments_json,
     quizzes_json,
+    exam_questions_json,
+    answer_keys_text,
     exam_marking_guide,
     media_lesson_url,
+    course_files_json,
     ...publicCourse
   } = course;
 
@@ -506,19 +564,27 @@ router.get('/courses/:id/classroom', requireAuth, async (req, res) => {
           ...publicCourse,
           modules_notes_json,
           slides_resources_json,
+          workbooks_exercises_json,
           assignments_json,
           quizzes_json,
+          exam_questions_json,
+          answer_keys_text,
           exam_marking_guide,
           media_lesson_url,
+          course_files_json,
         }
       : {
           ...publicCourse,
           modules_notes_json: '[]',
           slides_resources_json: '[]',
+          workbooks_exercises_json: '[]',
           assignments_json: '[]',
           quizzes_json: '[]',
+          exam_questions_json: '[]',
+          answer_keys_text: '',
           exam_marking_guide: '',
           media_lesson_url: '',
+          course_files_json: '[]',
         },
     completeness,
     enrolment: enrolment || null,
@@ -928,16 +994,23 @@ router.get('/products', optionalAuth, (req, res) => {
 
   const rows = db.prepare(`
     SELECT p.id, p.seller_id, p.title, p.category, p.market_suite, p.product_type, p.description, p.price_pi, p.stock_qty,
-           p.image_url, p.approval_status, p.source_origin, p.source_url, p.distribution_permission,
+           p.image_url, p.approval_status, p.lifecycle_status, p.file_original_name, p.file_format, p.file_size_bytes,
+           p.malware_scan_status, p.version, p.preview_images_json, p.support_info, p.creator_ownership_attested,
+           p.license_verified_at, p.file_verified_at, p.download_count,
+           p.source_origin, p.source_url, p.distribution_permission,
            p.delivery_method, p.refund_support_terms, p.availability_status, p.last_verified_at,
            p.moderation_action, p.review_notes, p.created_at,
-           (CASE WHEN length(COALESCE(p.locked_content_enc, '')) > 0 OR p.product_type != 'physical' THEN 1 ELSE 0 END) as has_locked_content,
+           (CASE WHEN length(COALESCE(p.file_storage_key, '')) > 0 THEN 1 ELSE 0 END) as has_file,
+           (CASE WHEN length(COALESCE(p.locked_content_enc, '')) > 0 OR length(COALESCE(p.file_storage_key, '')) > 0 OR p.product_type != 'physical' THEN 1 ELSE 0 END) as has_locked_content,
            s.store_name, s.country as seller_country, s.user_id as seller_user_id,
       (SELECT ROUND(AVG(r.rating), 1) FROM reviews r WHERE r.target_type = 'product' AND r.target_id = p.id AND r.moderation_status = 'approved') as avg_rating,
       (SELECT COUNT(*) FROM reviews r WHERE r.target_type = 'product' AND r.target_id = p.id AND r.moderation_status = 'approved') as review_count
     FROM products p
     JOIN sellers s ON s.id = p.seller_id
-    WHERE (p.approval_status = 'approved' AND s.verification_status = 'verified' AND COALESCE(p.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected'))
+    WHERE (p.approval_status = 'approved'
+           AND COALESCE(p.lifecycle_status, 'published') IN ('approved', 'published')
+           AND s.verification_status = 'verified'
+           AND COALESCE(p.moderation_action, '') NOT IN ('suspended', 'correction_requested', 'rejected'))
        OR (? IS NOT NULL AND s.user_id = ?)
     ORDER BY p.created_at DESC
   `).all(req.authUser?.id ?? null, req.authUser?.id ?? null) as Array<Record<string, unknown>>;
@@ -1011,12 +1084,34 @@ router.post('/products', requireAuth, (req, res) => {
   const refundSupportTerms = typeof req.body?.refundSupportTerms === 'string' ? req.body.refundSupportTerms.trim().slice(0, 300) : '';
   const imageUrl = sanitizeHttpUrl(req.body?.imageUrl) || (typeof req.body?.imageUrl === 'string' && req.body.imageUrl.startsWith('/api/uploads/') ? req.body.imageUrl : '');
   const lockedContent = typeof req.body?.lockedContent === 'string' ? req.body.lockedContent.trim() : '';
+  const version = typeof req.body?.version === 'string' && req.body.version.trim() ? req.body.version.trim().slice(0, 40) : '1.0.0';
+  const supportInfo = typeof req.body?.supportInfo === 'string' ? req.body.supportInfo.trim().slice(0, 300) : '';
+  const previewImages = Array.isArray(req.body?.previewImages)
+    ? req.body.previewImages
+        .map((u: unknown) => {
+          const str = String(u || '').trim();
+          return str.startsWith('/api/uploads/') ? str : sanitizeHttpUrl(str);
+        })
+        .filter(Boolean)
+        .slice(0, 6)
+    : [];
+  const fileStorageKey = typeof req.body?.fileStorageKey === 'string' ? req.body.fileStorageKey.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 120) : '';
+  const fileOriginalName = typeof req.body?.fileOriginalName === 'string' ? req.body.fileOriginalName.trim().slice(0, 180) : '';
+  const fileFormat = typeof req.body?.fileFormat === 'string' ? req.body.fileFormat.trim().slice(0, 20) : '';
+  const fileSizeBytes = Math.max(0, Number(req.body?.fileSizeBytes) || 0);
+  const fileSha256 = typeof req.body?.fileSha256 === 'string' ? req.body.fileSha256.trim().slice(0, 80) : '';
+  const malwareScanStatus = fileStorageKey ? 'clean_verified' : 'not_uploaded';
+  const creatorOwnershipAttested = req.body?.creatorOwnershipAttested === false ? 0 : 1;
+  const saveAsDraft = req.body?.lifecycleStatus === 'draft';
 
   if (title.length < 3 || description.length < 15 || !Number.isFinite(pricePi) || pricePi <= 0) {
     return res.status(400).json({ error: 'Valid product title, description, and price (> 0 PI) are required.' });
   }
   if (distributionPermission.length < 5 || refundSupportTerms.length < 8) {
     return res.status(400).json({ error: 'Ownership/distribution permission and explicit refund/support terms are required for every marketplace listing.' });
+  }
+  if (!saveAsDraft && !creatorOwnershipAttested) {
+    return res.status(400).json({ error: 'Creator ownership / licensed resale attestation is required before submitting.' });
   }
 
   const isAdmin = req.authUser!.roles.includes('super_admin');
@@ -1039,14 +1134,20 @@ router.post('/products', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'Your Seller storefront is awaiting administrator verification.' });
   }
 
-  const status = isAdmin ? 'approved' : 'pending';
+  const status = isAdmin && !saveAsDraft ? 'approved' : 'pending';
+  const lifecycleStatus = saveAsDraft ? 'draft' : isAdmin ? 'published' : 'submitted';
   const availability = stockQty > 0 ? 'available' : 'out_of_stock';
+  const nowIso = isAdmin && !saveAsDraft ? new Date().toISOString() : null;
+
   const ins = db.prepare(`
     INSERT INTO products (
       seller_id, title, category, market_suite, product_type, description, price_pi, stock_qty,
-      image_url, approval_status, source_origin, source_url, distribution_permission,
+      image_url, approval_status, lifecycle_status,
+      file_storage_key, file_original_name, file_format, file_size_bytes, file_sha256, malware_scan_status,
+      version, preview_images_json, support_info, creator_ownership_attested, license_verified_at, file_verified_at,
+      source_origin, source_url, distribution_permission,
       delivery_method, refund_support_terms, availability_status, last_verified_at, locked_content_enc
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     seller.id,
     title,
@@ -1058,18 +1159,67 @@ router.post('/products', requireAuth, (req, res) => {
     stockQty,
     imageUrl,
     status,
+    lifecycleStatus,
+    fileStorageKey,
+    fileOriginalName,
+    fileFormat,
+    fileSizeBytes,
+    fileSha256,
+    malwareScanStatus,
+    version,
+    JSON.stringify(previewImages),
+    supportInfo || refundSupportTerms,
+    creatorOwnershipAttested,
+    nowIso,
+    nowIso,
     sourceOrigin,
     sourceUrl,
     distributionPermission,
     deliveryMethod,
     refundSupportTerms,
     availability,
-    isAdmin ? new Date().toISOString() : null,
+    nowIso,
     encryptSensitive(lockedContent)
   );
 
-  recordAudit(req.authUser!.id, 'product_created', 'product', Number(ins.lastInsertRowid), req.ip || '', { status, sourceOrigin, marketSuite });
-  return res.status(201).json({ id: Number(ins.lastInsertRowid), approvalStatus: status });
+  recordAudit(req.authUser!.id, 'product_created', 'product', Number(ins.lastInsertRowid), req.ip || '', {
+    status,
+    lifecycleStatus,
+    sourceOrigin,
+    marketSuite,
+    hasFile: Boolean(fileStorageKey),
+  });
+  return res.status(201).json({
+    id: Number(ins.lastInsertRowid),
+    approvalStatus: status,
+    lifecycleStatus,
+  });
+});
+
+router.post('/products/:id/submit', requireAuth, (req, res) => {
+  const productId = Number(req.params.id);
+  const row = db.prepare(`
+    SELECT p.id, p.lifecycle_status, p.title, p.creator_ownership_attested, s.user_id as seller_user_id
+    FROM products p JOIN sellers s ON s.id = p.seller_id WHERE p.id = ?
+  `).get(productId) as
+    | { id: number; lifecycle_status: string; title: string; creator_ownership_attested: number; seller_user_id: number }
+    | undefined;
+
+  if (!row) return res.status(404).json({ error: 'Product not found.' });
+  if (row.seller_user_id !== req.authUser!.id && !req.authUser!.roles.includes('super_admin')) {
+    return res.status(403).json({ error: 'You can only submit your own product listings.' });
+  }
+  if (!['draft', 'submitted', 'awaiting_license_verification'].includes(row.lifecycle_status)) {
+    return res.status(400).json({ error: `Listing in "${row.lifecycle_status}" state cannot be re-submitted from draft.` });
+  }
+
+  db.prepare(`
+    UPDATE products
+    SET lifecycle_status = 'submitted', approval_status = 'pending', creator_ownership_attested = 1
+    WHERE id = ?
+  `).run(productId);
+  recordAudit(req.authUser!.id, 'product_submitted_for_review', 'product', productId, req.ip || '', {});
+  return res.json({ id: productId, lifecycleStatus: 'submitted', approvalStatus: 'pending' });
 });
 
 router.post('/reviews', requireAuth, (req, res) => {

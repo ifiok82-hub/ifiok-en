@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Router } from 'express';
-import { db, getSettingsMap } from '../db.ts';
-import { decryptSensitive } from '../lib/crypto.ts';
+import { db, getSettingsMap, PRIVATE_ASSETS_DIR } from '../db.ts';
+import { decryptSensitive, signDownloadToken, verifyDownloadToken } from '../lib/crypto.ts';
 import {
   createNotification,
   createSecurityAlert,
@@ -134,7 +136,7 @@ router.post('/create-intent', requireAuth, (req, res) => {
     `).run(userId, course.id);
   } else if (orderType === 'product') {
     const product = db.prepare(`
-      SELECT p.id, p.title, p.price_pi, p.stock_qty, p.approval_status, p.product_type, p.availability_status
+      SELECT p.id, p.title, p.price_pi, p.stock_qty, p.approval_status, p.lifecycle_status, p.product_type, p.availability_status
       FROM products p WHERE p.id = ?
     `).get(referenceId) as
       | {
@@ -143,11 +145,17 @@ router.post('/create-intent', requireAuth, (req, res) => {
           price_pi: number;
           stock_qty: number;
           approval_status: string;
+          lifecycle_status: string;
           product_type: string;
           availability_status: string;
         }
       | undefined;
-    if (!product || product.approval_status !== 'approved' || product.availability_status === 'out_of_stock') {
+    if (
+      !product ||
+      product.approval_status !== 'approved' ||
+      !['approved', 'published'].includes(product.lifecycle_status || 'published') ||
+      product.availability_status === 'out_of_stock'
+    ) {
       return res.status(404).json({ error: 'Approved in-stock marketplace product not found.' });
     }
     if (product.stock_qty < 1) {
@@ -563,43 +571,294 @@ router.get('/entitlements/:itemType/:itemId', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Invalid entitlement query.' });
   }
 
+  const isAdmin = req.authUser!.roles.includes('super_admin');
+
+  if (itemType === 'product') {
+    const prod = db.prepare(`
+      SELECT p.id, p.title, p.locked_content_enc, p.file_storage_key, p.file_original_name, p.file_format,
+             p.file_size_bytes, p.file_sha256, p.version, s.user_id as seller_user_id
+      FROM products p JOIN sellers s ON s.id = p.seller_id WHERE p.id = ?
+    `).get(itemId) as
+      | {
+          id: number;
+          title: string;
+          locked_content_enc: string;
+          file_storage_key: string;
+          file_original_name: string;
+          file_format: string;
+          file_size_bytes: number;
+          file_sha256: string;
+          version: string;
+          seller_user_id: number;
+        }
+      | undefined;
+
+    if (!prod) return res.status(404).json({ error: 'Digital product not found.' });
+
+    const ent = db.prepare(`
+      SELECT e.is_unlocked, e.unlocked_at
+      FROM entitlements e
+      JOIN orders o ON o.id = e.order_id
+      WHERE e.user_id = ? AND e.item_type = 'product' AND e.item_id = ? AND e.is_unlocked = 1 AND o.status IN ('paid', 'fulfilled')
+    `).get(req.authUser!.id, itemId) as { is_unlocked: number; unlocked_at: string } | undefined;
+
+    if (!ent && !isAdmin && prod.seller_user_id !== req.authUser!.id) {
+      return res.status(402).json({
+        unlocked: false,
+        error: 'Content is locked until server verifies Pi Network payment completion.',
+      });
+    }
+
+    return res.json({
+      unlocked: true,
+      unlockedAt: ent?.unlocked_at || new Date().toISOString(),
+      title: prod.title,
+      content: prod.locked_content_enc ? decryptSensitive(prod.locked_content_enc) : 'Verified digital entitlement active.',
+      hasFile: Boolean(prod.file_storage_key),
+      fileOriginalName: prod.file_original_name || '',
+      fileFormat: prod.file_format || '',
+      fileSizeBytes: prod.file_size_bytes || 0,
+      fileSha256: prod.file_sha256 || '',
+      version: prod.version || '1.0.0',
+    });
+  }
+
+  const course = db.prepare(`
+    SELECT c.id, c.title, c.price_pi, c.locked_materials_enc, c.course_files_json, i.user_id as instructor_user_id
+    FROM courses c JOIN instructors i ON i.id = c.instructor_id WHERE c.id = ?
+  `).get(itemId) as
+    | {
+        id: number;
+        title: string;
+        price_pi: number;
+        locked_materials_enc: string;
+        course_files_json: string;
+        instructor_user_id: number;
+      }
+    | undefined;
+  if (!course) return res.status(404).json({ error: 'Course not found.' });
+
   const ent = db.prepare(`
-    SELECT e.is_unlocked, e.unlocked_at, o.status as order_status
+    SELECT e.is_unlocked, e.unlocked_at
     FROM entitlements e
     JOIN orders o ON o.id = e.order_id
-    WHERE e.user_id = ? AND e.item_type = ? AND e.item_id = ? AND e.is_unlocked = 1 AND o.status IN ('paid', 'fulfilled')
-  `).get(req.authUser!.id, itemType, itemId) as
-    | { is_unlocked: number; unlocked_at: string; order_status: string }
-    | undefined;
+    WHERE e.user_id = ? AND e.item_type = 'course' AND e.item_id = ? AND e.is_unlocked = 1 AND o.status IN ('paid', 'fulfilled')
+  `).get(req.authUser!.id, itemId) as { is_unlocked: number; unlocked_at: string } | undefined;
 
-  if (!ent) {
+  const isFree = Number(course.price_pi) === 0;
+  if (!ent && !isFree && !isAdmin && course.instructor_user_id !== req.authUser!.id) {
     return res.status(402).json({
       unlocked: false,
       error: 'Content is locked until server verifies Pi Network payment completion.',
     });
   }
 
-  if (itemType === 'product') {
-    const prod = db.prepare(`SELECT title, locked_content_enc FROM products WHERE id = ?`).get(itemId) as
-      | { title: string; locked_content_enc: string }
-      | undefined;
-    return res.json({
-      unlocked: true,
-      unlockedAt: ent.unlocked_at,
-      title: prod?.title || '',
-      content: prod?.locked_content_enc ? decryptSensitive(prod.locked_content_enc) : 'Verified digital entitlement active.',
-    });
+  let courseFiles: Array<{ storageKey: string; originalName: string; fileFormat: string; fileSizeBytes: number }> = [];
+  try {
+    const parsed = JSON.parse(course.course_files_json || '[]');
+    if (Array.isArray(parsed)) courseFiles = parsed;
+  } catch {
+    courseFiles = [];
   }
 
-  const course = db.prepare(`SELECT title, locked_materials_enc FROM courses WHERE id = ?`).get(itemId) as
-    | { title: string; locked_materials_enc: string }
-    | undefined;
   return res.json({
     unlocked: true,
-    unlockedAt: ent.unlocked_at,
-    title: course?.title || '',
-    content: course?.locked_materials_enc ? decryptSensitive(course.locked_materials_enc) : 'Verified course curriculum unlocked.',
+    unlockedAt: ent?.unlocked_at || new Date().toISOString(),
+    title: course.title,
+    content: course.locked_materials_enc ? decryptSensitive(course.locked_materials_enc) : 'Verified course curriculum unlocked.',
+    courseFiles,
   });
+});
+
+// Issue short-lived (300s) HMAC-SHA256 signed download token for an unlocked product or course file
+router.post('/entitlements/:itemType/:itemId/download-token', requireAuth, (req, res) => {
+  const itemType = req.params.itemType;
+  const itemId = Number(req.params.itemId);
+  const requestedFileKey = typeof req.body?.fileKey === 'string' ? path.basename(req.body.fileKey.trim()) : '';
+
+  if (!['product', 'course'].includes(itemType) || !itemId) {
+    return res.status(400).json({ error: 'Invalid download token request.' });
+  }
+
+  const isAdmin = req.authUser!.roles.includes('super_admin');
+  let storageKey = '';
+  let originalName = '';
+  let fileFormat = '';
+  let fileSizeBytes = 0;
+
+  if (itemType === 'product') {
+    const prod = db.prepare(`
+      SELECT p.id, p.title, p.file_storage_key, p.file_original_name, p.file_format, p.file_size_bytes, s.user_id as seller_user_id
+      FROM products p JOIN sellers s ON s.id = p.seller_id WHERE p.id = ?
+    `).get(itemId) as
+      | {
+          id: number;
+          title: string;
+          file_storage_key: string;
+          file_original_name: string;
+          file_format: string;
+          file_size_bytes: number;
+          seller_user_id: number;
+        }
+      | undefined;
+    if (!prod) return res.status(404).json({ error: 'Product not found.' });
+
+    const ent = db.prepare(`
+      SELECT e.id FROM entitlements e
+      JOIN orders o ON o.id = e.order_id
+      WHERE e.user_id = ? AND e.item_type = 'product' AND e.item_id = ? AND e.is_unlocked = 1 AND o.status IN ('paid', 'fulfilled')
+    `).get(req.authUser!.id, itemId);
+
+    if (!ent && !isAdmin && prod.seller_user_id !== req.authUser!.id) {
+      return res.status(402).json({ error: 'Download locked: Pi Network payment verification required.' });
+    }
+    if (!prod.file_storage_key) {
+      return res.status(404).json({ error: 'No binary digital file is attached to this listing.' });
+    }
+    storageKey = path.basename(prod.file_storage_key);
+    originalName = prod.file_original_name || storageKey;
+    fileFormat = prod.file_format || '';
+    fileSizeBytes = prod.file_size_bytes || 0;
+  } else {
+    const course = db.prepare(`
+      SELECT c.id, c.price_pi, c.course_files_json, i.user_id as instructor_user_id
+      FROM courses c JOIN instructors i ON i.id = c.instructor_id WHERE c.id = ?
+    `).get(itemId) as
+      | { id: number; price_pi: number; course_files_json: string; instructor_user_id: number }
+      | undefined;
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+
+    const ent = db.prepare(`
+      SELECT e.id FROM entitlements e
+      JOIN orders o ON o.id = e.order_id
+      WHERE e.user_id = ? AND e.item_type = 'course' AND e.item_id = ? AND e.is_unlocked = 1 AND o.status IN ('paid', 'fulfilled')
+    `).get(req.authUser!.id, itemId);
+    const isFree = Number(course.price_pi) === 0;
+    if (!ent && !isFree && !isAdmin && course.instructor_user_id !== req.authUser!.id) {
+      return res.status(402).json({ error: 'Download locked: complete Pi payment or enrolment first.' });
+    }
+
+    let files: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }> = [];
+    try {
+      const parsed = JSON.parse(course.course_files_json || '[]');
+      if (Array.isArray(parsed)) files = parsed;
+    } catch {
+      files = [];
+    }
+    const matched = requestedFileKey ? files.find((f) => f.storageKey === requestedFileKey) : files[0];
+    if (!matched || !matched.storageKey) {
+      return res.status(404).json({ error: 'Requested course material file was not found.' });
+    }
+    storageKey = path.basename(matched.storageKey);
+    originalName = matched.originalName || storageKey;
+    fileFormat = matched.fileFormat || '';
+    fileSizeBytes = Number(matched.fileSizeBytes || 0);
+  }
+
+  const targetPath = path.join(PRIVATE_ASSETS_DIR, storageKey);
+  if (!fs.existsSync(targetPath)) {
+    return res.status(404).json({ error: 'Asset file not found in private vault.' });
+  }
+
+  const ttlSeconds = 300;
+  const token = signDownloadToken(
+    {
+      userId: req.authUser!.id,
+      itemType: itemType as 'product' | 'course',
+      itemId,
+      storageKey,
+      originalName,
+    },
+    ttlSeconds
+  );
+
+  return res.json({
+    token,
+    downloadUrl: `/api/payments/download/${encodeURIComponent(token)}`,
+    expiresInSeconds: ttlSeconds,
+    fileName: originalName,
+    fileFormat,
+    fileSizeBytes,
+  });
+});
+
+// Stream private digital asset ONLY with valid, unexpired, DB-verified entitlement token
+router.get('/download/:token', requireAuth, (req, res) => {
+  const token = String(req.params.token || '');
+  const verified = verifyDownloadToken(token);
+  if (verified.valid === false) {
+    return res.status(verified.status).json({ error: verified.error });
+  }
+
+  const { payload } = verified;
+  if (payload.userId !== req.authUser!.id && !req.authUser!.roles.includes('super_admin')) {
+    recordSecurityEvent(
+      'download_token_user_mismatch',
+      'critical',
+      req.authUser!.id,
+      req.ip || '',
+      `User #${req.authUser!.id} attempted download using token belonging to user #${payload.userId}`
+    );
+    return res.status(403).json({ error: 'Download token belongs to a different account.' });
+  }
+
+  const safeKey = path.basename(payload.storageKey);
+  const targetPath = path.join(PRIVATE_ASSETS_DIR, safeKey);
+  if (!fs.existsSync(targetPath)) {
+    return res.status(404).json({ error: 'File no longer exists in private vault.' });
+  }
+
+  // Re-verify live entitlement at download time (prevents revoked/refunded orders from downloading)
+  const isAdmin = req.authUser!.roles.includes('super_admin');
+  if (payload.itemType === 'product') {
+    const prodOwner = db.prepare(`SELECT s.user_id FROM products p JOIN sellers s ON s.id = p.seller_id WHERE p.id = ?`).get(payload.itemId) as
+      | { user_id: number }
+      | undefined;
+    const ent = db.prepare(`
+      SELECT e.order_id FROM entitlements e
+      JOIN orders o ON o.id = e.order_id
+      WHERE e.user_id = ? AND e.item_type = 'product' AND e.item_id = ? AND e.is_unlocked = 1 AND o.status IN ('paid', 'fulfilled')
+    `).get(payload.userId, payload.itemId) as { order_id: number } | undefined;
+
+    if (!ent && !isAdmin && prodOwner?.user_id !== payload.userId) {
+      return res.status(403).json({ error: 'Entitlement revoked or unpaid. Download denied.' });
+    }
+
+    db.prepare(`
+      INSERT INTO product_downloads (user_id, product_id, order_id, ip_address)
+      VALUES (?, ?, ?, ?)
+    `).run(req.authUser!.id, payload.itemId, ent?.order_id ?? null, req.ip || '');
+    db.prepare(`UPDATE products SET download_count = download_count + 1 WHERE id = ?`).run(payload.itemId);
+  } else if (payload.itemType === 'course') {
+    const course = db.prepare(`
+      SELECT c.price_pi, i.user_id as instructor_user_id
+      FROM courses c JOIN instructors i ON i.id = c.instructor_id WHERE c.id = ?
+    `).get(payload.itemId) as { price_pi: number; instructor_user_id: number } | undefined;
+    const ent = db.prepare(`
+      SELECT e.id FROM entitlements e
+      JOIN orders o ON o.id = e.order_id
+      WHERE e.user_id = ? AND e.item_type = 'course' AND e.item_id = ? AND e.is_unlocked = 1 AND o.status IN ('paid', 'fulfilled')
+    `).get(payload.userId, payload.itemId);
+    const isFree = course && Number(course.price_pi) === 0;
+    if (!ent && !isFree && !isAdmin && course?.instructor_user_id !== payload.userId) {
+      return res.status(403).json({ error: 'Course entitlement revoked or unpaid. Download denied.' });
+    }
+
+    db.prepare(`
+      INSERT INTO course_downloads (user_id, course_id, file_key, ip_address)
+      VALUES (?, ?, ?, ?)
+    `).run(req.authUser!.id, payload.itemId, safeKey, req.ip || '');
+  }
+
+  recordAudit(req.authUser!.id, 'digital_asset_downloaded', payload.itemType, payload.itemId, req.ip || '', {
+    storageKey: safeKey,
+  });
+
+  const cleanFileName = payload.originalName.replace(/["\r\n]/g, '_') || safeKey;
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.setHeader('Content-Disposition', `attachment; filename="${cleanFileName}"`);
+  return res.sendFile(targetPath);
 });
 
 // Physical order fulfillment guard (strictly blocks shipping unpaid orders)

@@ -49,9 +49,12 @@ router.get('/overview', requireAuth, (req, res) => {
   const myProducts = sellerProfile
     ? db.prepare(`
         SELECT id, seller_id, title, category, market_suite, product_type, description, price_pi, stock_qty,
-               image_url, approval_status, moderation_action, review_notes, delivery_method,
+               image_url, approval_status, lifecycle_status, file_original_name, file_format, file_size_bytes,
+               malware_scan_status, version, support_info, creator_ownership_attested, download_count,
+               moderation_action, review_notes, delivery_method,
                distribution_permission, refund_support_terms,
-               source_origin, availability_status, last_verified_at, created_at
+               source_origin, availability_status, last_verified_at, created_at,
+               (CASE WHEN length(COALESCE(file_storage_key, '')) > 0 THEN 1 ELSE 0 END) as has_file
         FROM products WHERE seller_id = ? ORDER BY created_at DESC
       `).all((sellerProfile as { id: number }).id)
     : [];
@@ -91,9 +94,17 @@ router.get('/overview', requireAuth, (req, res) => {
 
   const entitlements = db.prepare(`
     SELECT e.id, e.order_id, e.item_type, e.item_id, e.is_unlocked, e.unlocked_at, e.revoked_at,
-           o.status as order_status, o.item_title
+           o.status as order_status, o.item_title,
+           (CASE
+             WHEN e.item_type = 'product' AND length(COALESCE(pr.file_storage_key, '')) > 0 THEN 1
+             WHEN e.item_type = 'course' AND length(COALESCE(c.course_files_json, '[]')) > 4 THEN 1
+             ELSE 0
+           END) as item_has_file,
+           pr.file_original_name, pr.file_format, pr.file_size_bytes, pr.version as product_version
     FROM entitlements e
     JOIN orders o ON o.id = e.order_id
+    LEFT JOIN products pr ON e.item_type = 'product' AND pr.id = e.item_id
+    LEFT JOIN courses c ON e.item_type = 'course' AND c.id = e.item_id
     WHERE e.user_id = ?
     ORDER BY e.id DESC
   `).all(uid);

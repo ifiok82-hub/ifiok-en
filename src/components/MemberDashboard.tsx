@@ -5,6 +5,7 @@ import {
   Briefcase,
   Building2,
   CreditCard,
+  Download,
   Flag,
   HelpCircle,
   KeyRound,
@@ -139,6 +140,11 @@ interface DashboardData {
     revoked_at: string | null;
     order_status: string;
     item_title: string;
+    item_has_file?: number;
+    file_original_name?: string | null;
+    file_format?: string | null;
+    file_size_bytes?: number;
+    product_version?: string;
   }>;
   sellerOrders?: Array<{
     id: number;
@@ -222,7 +228,20 @@ export function MemberDashboard({
   const [mfaVerifyCode, setMfaVerifyCode] = useState('');
 
   // Unlocked content viewer state
-  const [unlockedModal, setUnlockedModal] = useState<{ title: string; content: string; unlockedAt: string } | null>(null);
+  const [unlockedModal, setUnlockedModal] = useState<{
+    itemType: 'product' | 'course';
+    itemId: number;
+    title: string;
+    content: string;
+    unlockedAt: string;
+    hasFile?: boolean;
+    fileOriginalName?: string;
+    fileFormat?: string;
+    fileSizeBytes?: number;
+    version?: string;
+    courseFiles?: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }>;
+  } | null>(null);
+  const [downloadingFile, setDownloadingFile] = useState(false);
 
   const isAdmin = user.roles.some((r) => ['super_admin', 'moderator', 'finance_admin'].includes(r));
 
@@ -393,15 +412,77 @@ export function MemberDashboard({
 
   const handleAccessEntitlement = async (itemType: 'product' | 'course', itemId: number) => {
     try {
-      const res = await apiRequest<{ unlocked: boolean; unlockedAt: string; title: string; content: string }>(
-        `/api/payments/entitlements/${itemType}/${itemId}`
-      );
-      setUnlockedModal({ title: res.title, content: res.content, unlockedAt: res.unlockedAt });
+      const res = await apiRequest<{
+        unlocked: boolean;
+        unlockedAt: string;
+        title: string;
+        content: string;
+        hasFile?: boolean;
+        fileOriginalName?: string;
+        fileFormat?: string;
+        fileSizeBytes?: number;
+        version?: string;
+        courseFiles?: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }>;
+      }>(`/api/payments/entitlements/${itemType}/${itemId}`);
+      setUnlockedModal({
+        itemType,
+        itemId,
+        title: res.title,
+        content: res.content,
+        unlockedAt: res.unlockedAt,
+        hasFile: res.hasFile,
+        fileOriginalName: res.fileOriginalName,
+        fileFormat: res.fileFormat,
+        fileSizeBytes: res.fileSizeBytes,
+        version: res.version,
+        courseFiles: res.courseFiles,
+      });
     } catch (err) {
       setNotice({
         type: 'err',
         text: err instanceof Error ? err.message : 'Content remains locked until Pi Network payment is verified.',
       });
+    }
+  };
+
+  const handleDownloadEntitlementFile = async (
+    itemType: 'product' | 'course',
+    itemId: number,
+    fileKey?: string
+  ) => {
+    setDownloadingFile(true);
+    try {
+      const res = await apiRequest<{ downloadUrl: string; fileName: string }>(
+        `/api/payments/entitlements/${itemType}/${itemId}/download-token`,
+        {
+          method: 'POST',
+          body: JSON.stringify(fileKey ? { fileKey } : {}),
+        }
+      );
+      const link = document.createElement('a');
+      link.href = res.downloadUrl;
+      link.download = res.fileName || 'ifiok-digital-asset';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setNotice({ type: 'ok', text: `Download initiated for ${res.fileName} (verified 300s token).` });
+    } catch (err) {
+      setNotice({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Unable to issue signed download token.',
+      });
+    } finally {
+      setDownloadingFile(false);
+    }
+  };
+
+  const handleSubmitDraftProduct = async (productId: number) => {
+    try {
+      await apiRequest(`/api/divisions/products/${productId}/submit`, { method: 'POST' });
+      setNotice({ type: 'ok', text: `Product #${productId} submitted for verification review.` });
+      fetchOverview();
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Could not submit draft.' });
     }
   };
 
@@ -859,7 +940,7 @@ export function MemberDashboard({
                       onClick={() => onOpenDivision('academy', 'courses')}
                       className="px-3.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
                     >
-                      Browse 17 Subjects
+                      Browse 20 Subjects
                     </button>
                   </div>
                 </div>
@@ -988,8 +1069,8 @@ export function MemberDashboard({
                               <div className="font-semibold text-sm text-slate-900 dark:text-white">{String(c.title)}</div>
                               <div className="text-slate-500">
                                 {String(c.category)} · {String(c.price_pi)} π · Curriculum:{' '}
-                                <span className="font-mono font-semibold">
-                                  {String(c.completeness_score ?? 0)}/15
+                                <span className="font-mono font-semibold tabular-nums">
+                                  {String(c.completeness_score ?? 0)}/{String(c.completeness_total ?? 22)}
                                 </span>
                               </div>
                               {typeof c.review_notes === 'string' && c.review_notes && (
@@ -1193,25 +1274,46 @@ export function MemberDashboard({
                               <td className="py-3 px-4 font-mono uppercase">{o.status}</td>
                               <td className="py-3 px-4">
                                 {(o.order_type === 'product' || o.order_type === 'course') ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleAccessEntitlement(o.order_type as 'product' | 'course', o.reference_id)}
-                                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold cursor-pointer ${
-                                      o.status === 'paid' || o.status === 'fulfilled'
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
-                                    }`}
-                                  >
-                                    {o.status === 'paid' || o.status === 'fulfilled' ? (
-                                      <>
-                                        <Unlock className="w-3 h-3" /> <span>Access Content</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Lock className="w-3 h-3" /> <span>Locked (Verify Pi)</span>
-                                      </>
-                                    )}
-                                  </button>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleAccessEntitlement(o.order_type as 'product' | 'course', o.reference_id)}
+                                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold cursor-pointer ${
+                                        o.status === 'paid' || o.status === 'fulfilled'
+                                          ? 'bg-emerald-600 text-white'
+                                          : 'border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                                      }`}
+                                    >
+                                      {o.status === 'paid' || o.status === 'fulfilled' ? (
+                                        <>
+                                          <Unlock className="w-3 h-3" /> <span>Access Content</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Lock className="w-3 h-3" /> <span>Locked (Verify Pi)</span>
+                                        </>
+                                      )}
+                                    </button>
+                                    {(o.status === 'paid' || o.status === 'fulfilled') &&
+                                      data.entitlements?.some(
+                                        (ent) =>
+                                          ent.item_type === o.order_type &&
+                                          ent.item_id === o.reference_id &&
+                                          ent.item_has_file === 1
+                                      ) && (
+                                        <button
+                                          type="button"
+                                          disabled={downloadingFile}
+                                          onClick={() =>
+                                            handleDownloadEntitlementFile(o.order_type as 'product' | 'course', o.reference_id)
+                                          }
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold cursor-pointer"
+                                        >
+                                          <Download className="w-3 h-3" />
+                                          <span>Download File</span>
+                                        </button>
+                                      )}
+                                  </div>
                                 ) : (
                                   <span className="font-mono text-[11px] uppercase text-slate-500">
                                     {o.fulfillment_status || o.status}
@@ -1305,7 +1407,10 @@ export function MemberDashboard({
                             <div className="space-y-1">
                               <div className="font-semibold text-sm text-slate-950 dark:text-white">{String(p.title)}</div>
                               <div className="text-slate-500">
-                                {String(p.market_suite || p.category)} · <span className="font-mono">{String(p.price_pi)} π</span> · Availability:{' '}
+                                {String(p.market_suite || p.category)} · <span className="font-mono tabular-nums">{String(p.price_pi)} π</span> ·{' '}
+                                <span className="font-mono">v{String(p.version || '1.0.0')}</span>
+                                {p.file_format ? ` · ${String(p.file_format)}` : ''}
+                                {typeof p.download_count === 'number' ? ` · ${p.download_count} downloads` : ''} · Availability:{' '}
                                 <span className="font-mono uppercase">{String(p.availability_status || 'available')}</span>
                               </div>
                               {typeof p.review_notes === 'string' && p.review_notes && (
@@ -1314,12 +1419,23 @@ export function MemberDashboard({
                                 </p>
                               )}
                             </div>
-                            <span className="font-mono uppercase text-slate-700 dark:text-amber-400">
-                              {String(p.approval_status)}
-                              {typeof p.moderation_action === 'string' && p.moderation_action
-                                ? ` · ${p.moderation_action}`
-                                : ''}
-                            </span>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono uppercase text-slate-700 dark:text-amber-400">
+                                {String(p.lifecycle_status || p.approval_status)}
+                                {typeof p.moderation_action === 'string' && p.moderation_action
+                                  ? ` · ${p.moderation_action}`
+                                  : ''}
+                              </span>
+                              {String(p.lifecycle_status) === 'draft' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSubmitDraftProduct(Number(p.id))}
+                                  className="px-2.5 py-1 rounded bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 font-semibold cursor-pointer"
+                                >
+                                  Submit Draft
+                                </button>
+                              )}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1604,9 +1720,58 @@ export function MemberDashboard({
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <div className="rounded-lg bg-slate-50 dark:bg-[#081024] border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words">
+              <div className="rounded-lg bg-slate-50 dark:bg-[#081024] border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
                 {unlockedModal.content}
               </div>
+              {unlockedModal.itemType === 'product' && unlockedModal.hasFile && (
+                <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/30 p-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-xs">
+                    <div className="font-semibold text-slate-900 dark:text-white">
+                      {unlockedModal.fileOriginalName || 'Digital Product Package'}
+                    </div>
+                    <div className="font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                      v{unlockedModal.version || '1.0.0'}
+                      {unlockedModal.fileFormat ? ` · ${unlockedModal.fileFormat}` : ''}
+                      {unlockedModal.fileSizeBytes ? ` (${(unlockedModal.fileSizeBytes / 1024).toFixed(1)} KB)` : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={downloadingFile}
+                    onClick={() => handleDownloadEntitlementFile('product', unlockedModal.itemId)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{downloadingFile ? 'Preparing Token...' : 'Download Verified Digital File'}</span>
+                  </button>
+                </div>
+              )}
+              {unlockedModal.itemType === 'course' && unlockedModal.courseFiles && unlockedModal.courseFiles.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Unlocked Course Vault Materials
+                  </div>
+                  {unlockedModal.courseFiles.map((cf) => (
+                    <div
+                      key={cf.storageKey}
+                      className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-2.5 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <span className="font-mono truncate">
+                        {cf.originalName} {cf.fileFormat ? `(${cf.fileFormat})` : ''}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={downloadingFile}
+                        onClick={() => handleDownloadEntitlementFile('course', unlockedModal.itemId, cf.storageKey)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold cursor-pointer shrink-0 disabled:opacity-50"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Download</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <p className="text-[11px] font-mono text-slate-500">
                 Server-verified Pi entitlement unlocked at: {unlockedModal.unlockedAt}
               </p>

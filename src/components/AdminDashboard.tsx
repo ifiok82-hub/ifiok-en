@@ -61,6 +61,7 @@ interface AdminOverviewData {
     completedPaymentsCount: number;
     completedVolumePi: number;
     totalCommissionPi: number;
+    totalDigitalDownloads?: number;
   };
   settings: Record<string, string>;
   roles: Array<{ id: number; slug: string; name: string }>;
@@ -87,6 +88,7 @@ interface AdminOverviewData {
   transactions: Array<Record<string, unknown>>;
   piTestnetPayments: Array<Record<string, unknown>>;
   entitlements: Array<Record<string, unknown>>;
+  digitalDownloads?: Array<Record<string, unknown>>;
   supplierIntegrations: SupplierIntegration[];
   subscriptions: Array<Record<string, unknown>>;
   disputes: Array<Record<string, unknown>>;
@@ -124,20 +126,39 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
   const [pubExtraOrg, setPubExtraOrg] = useState('');
   const [pubDeadline, setPubDeadline] = useState('2026-12-31');
   const [uploadingPubImg, setUploadingPubImg] = useState(false);
+  const [pubProductVersion, setPubProductVersion] = useState('1.0.0');
+  const [pubFileMeta, setPubFileMeta] = useState<{
+    storageKey: string;
+    originalName: string;
+    fileFormat: string;
+    fileSizeBytes: number;
+    fileSha256: string;
+  } | null>(null);
+  const [uploadingPubFile, setUploadingPubFile] = useState(false);
+  const [batchJsonText, setBatchJsonText] = useState('');
+  const [batchImporting, setBatchImporting] = useState(false);
 
-  // Course 15-point Verified Publisher fields
+  // Course 22-point Verified Publisher fields
   const [pubLanguageCode, setPubLanguageCode] = useState('en');
   const [pubObjectivesText, setPubObjectivesText] = useState('');
   const [pubModulesText, setPubModulesText] = useState('');
   const [pubSlidesText, setPubSlidesText] = useState('');
+  const [pubWorkbooksText, setPubWorkbooksText] = useState('');
   const [pubAssignmentsText, setPubAssignmentsText] = useState('');
   const [pubQuizzesText, setPubQuizzesText] = useState('');
+  const [pubExamQuestionsText, setPubExamQuestionsText] = useState('');
+  const [pubAnswerKeysText, setPubAnswerKeysText] = useState('');
   const [pubExamGuide, setPubExamGuide] = useState('');
   const [pubMediaUrl, setPubMediaUrl] = useState('');
   const [pubInstructorQual, setPubInstructorQual] = useState('');
   const [pubPrerequisites, setPubPrerequisites] = useState('');
+  const [pubTargetAudience, setPubTargetAudience] = useState('');
   const [pubCopyright, setPubCopyright] = useState('');
   const [pubCertificateCriteria, setPubCertificateCriteria] = useState('');
+  const [pubCourseFiles, setPubCourseFiles] = useState<
+    Array<{ storageKey: string; originalName: string; fileFormat: string; fileSizeBytes: number; fileSha256: string }>
+  >([]);
+  const [uploadingPubCourseFile, setUploadingPubCourseFile] = useState(false);
 
   // Authorized Supplier Integrations state
   const [supName, setSupName] = useState('');
@@ -233,6 +254,104 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
     }
   };
 
+  const handleUploadPubProductFile = async (file: File) => {
+    setUploadingPubFile(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read digital asset file.'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiRequest<{
+        storageKey: string;
+        originalName: string;
+        fileFormat: string;
+        fileSizeBytes: number;
+        sha256: string;
+      }>('/api/uploads/digital-asset', {
+        method: 'POST',
+        body: JSON.stringify({ fileName: file.name, dataBase64: base64 }),
+      });
+      setPubFileMeta({
+        storageKey: res.storageKey,
+        originalName: res.originalName,
+        fileFormat: res.fileFormat,
+        fileSizeBytes: res.fileSizeBytes,
+        fileSha256: res.sha256,
+      });
+      setNotice({ type: 'ok', text: `Private vault asset "${res.originalName}" scanned clean.` });
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Digital asset upload rejected.' });
+    } finally {
+      setUploadingPubFile(false);
+    }
+  };
+
+  const handleUploadPubCourseFile = async (file: File) => {
+    setUploadingPubCourseFile(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read course material file.'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiRequest<{
+        storageKey: string;
+        originalName: string;
+        fileFormat: string;
+        fileSizeBytes: number;
+        sha256: string;
+      }>('/api/uploads/course-material', {
+        method: 'POST',
+        body: JSON.stringify({ fileName: file.name, dataBase64: base64 }),
+      });
+      setPubCourseFiles((prev) => [
+        ...prev,
+        {
+          storageKey: res.storageKey,
+          originalName: res.originalName,
+          fileFormat: res.fileFormat,
+          fileSizeBytes: res.fileSizeBytes,
+          fileSha256: res.sha256,
+        },
+      ]);
+      setNotice({ type: 'ok', text: `Course material "${res.originalName}" encrypted & attached.` });
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Course material upload rejected.' });
+    } finally {
+      setUploadingPubCourseFile(false);
+    }
+  };
+
+  const handleImportBatch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBatchImporting(true);
+    try {
+      const parsed = JSON.parse(batchJsonText);
+      const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : [];
+      const res = await apiRequest<{ imported: number; skipped: Array<{ index: number; reason: string }> }>(
+        '/api/admin/import-verified-batch',
+        {
+          method: 'POST',
+          body: JSON.stringify({ items }),
+        }
+      );
+      setNotice({
+        type: 'ok',
+        text: `Batch imported ${res.imported} verified IFIOK DIGITAL item(s)${res.skipped.length ? ` (${res.skipped.length} skipped)` : ''}.`,
+      });
+      if (res.imported > 0) setBatchJsonText('');
+      await loadAdmin();
+      onRefreshSummary();
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Invalid batch JSON or import rejected.' });
+    } finally {
+      setBatchImporting(false);
+    }
+  };
+
   const handlePublishVerified = async (e: React.FormEvent) => {
     e.preventDefault();
     const payload: Record<string, unknown> = {
@@ -253,6 +372,12 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
         deliveryMethod: pubDeliveryMethod,
         distributionPermission: pubDistPermission,
         refundSupportTerms: pubRefundTerms,
+        version: pubProductVersion || '1.0.0',
+        fileStorageKey: pubFileMeta?.storageKey || '',
+        fileOriginalName: pubFileMeta?.originalName || '',
+        fileFormat: pubFileMeta?.fileFormat || '',
+        fileSizeBytes: pubFileMeta?.fileSizeBytes || 0,
+        fileSha256: pubFileMeta?.fileSha256 || '',
         description: pubDescription,
         lockedContent: pubLockedPayload,
       });
@@ -275,14 +400,19 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
         learningObjectives: pubObjectivesText.split('\n').map((s) => s.trim()).filter(Boolean),
         modulesNotes: parsedModules,
         slidesResources: pubSlidesText.split('\n').map((s) => s.trim()).filter(Boolean),
+        workbooksExercises: pubWorkbooksText.split('\n').map((s) => s.trim()).filter(Boolean),
         assignments: pubAssignmentsText.split('\n').map((s) => s.trim()).filter(Boolean),
         quizzes: pubQuizzesText.split('\n').map((s) => s.trim()).filter(Boolean),
+        examQuestions: pubExamQuestionsText.split('\n').map((s) => s.trim()).filter(Boolean),
+        answerKeysText: pubAnswerKeysText,
         examMarkingGuide: pubExamGuide,
         mediaLessonUrl: pubMediaUrl,
         instructorQualifications: pubInstructorQual,
         prerequisites: pubPrerequisites,
+        targetAudience: pubTargetAudience,
         copyrightPermission: pubCopyright,
         certificateCriteria: pubCertificateCriteria,
+        courseFiles: pubCourseFiles,
         lockedMaterials: pubLockedPayload,
       });
     } else if (pubType === 'business') {
@@ -322,6 +452,12 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
       setPubDistPermission('');
       setPubRefundTerms('');
       setPubEligibility('');
+      setPubFileMeta(null);
+      setPubCourseFiles([]);
+      setPubWorkbooksText('');
+      setPubExamQuestionsText('');
+      setPubAnswerKeysText('');
+      setPubTargetAudience('');
     } catch (err) {
       setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Verified import rejected.' });
     }
@@ -501,6 +637,7 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   { label: 'Completed Pi Payments', val: data.analytics.completedPaymentsCount },
                   { label: 'Verified Pi Volume', val: `${data.analytics.completedVolumePi.toFixed(2)} π` },
                   { label: 'Platform Commissions', val: `${data.analytics.totalCommissionPi.toFixed(2)} π` },
+                  { label: 'Verified Digital Downloads', val: data.analytics.totalDigitalDownloads ?? 0 },
                   { label: 'Pi Environment', val: 'Testnet (Mainnet Locked)' },
                 ].map((m) => (
                   <div
@@ -612,7 +749,7 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                 />
 
                 <ApprovalSection
-                  title="IFIOK SCHOOL Courses Queue (15-Point Paid Curriculum Gate)"
+                  title="IFIOK SCHOOL Courses Queue (22-Point Paid Curriculum Gate)"
                   icon={BookOpen}
                   items={data.courses}
                   renderTitle={(c) => `${String(c.title)} — ${String(c.price_pi)} π (${String(c.instructor_name)})`}
@@ -620,13 +757,13 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   canApprove={(c) => !(Number(c.price_pi) > 0 && c.completeness_complete === false)}
                   renderExtra={(c) => {
                     const score = Number(c.completeness_score ?? 0);
-                    const total = Number(c.completeness_total ?? 15);
+                    const total = Number(c.completeness_total ?? 22);
                     const missing = Array.isArray(c.completeness_missing) ? (c.completeness_missing as string[]) : [];
                     const blocked = Number(c.price_pi) > 0 && c.completeness_complete === false;
                     return (
                       <div className="mt-1 space-y-1">
-                        <div className={`font-mono text-[11px] ${blocked ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-emerald-700 dark:text-emerald-400'}`}>
-                          Curriculum Completeness: {score}/{total} {blocked ? '(Approval Blocked until 15/15)' : '(Complete)'}
+                        <div className={`font-mono text-[11px] tabular-nums ${blocked ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-emerald-700 dark:text-emerald-400'}`}>
+                          Curriculum Completeness: {score}/{total} {blocked ? `(Approval Blocked until ${total}/${total})` : '(Complete)'}
                         </div>
                         {missing.length > 0 && (
                           <div className="text-[11px] text-slate-500">
@@ -659,43 +796,56 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                 />
 
                 <ApprovalSection
-                  title="Market Product Listings Queue"
+                  title="Market & IFIOK DIGITAL Listings Queue (9-State Lifecycle)"
                   icon={ShoppingBag}
                   items={data.products}
                   renderTitle={(p) =>
                     `${String(p.title)} — ${String(p.price_pi)} π (${String(p.store_name)} · Suite: ${String(p.market_suite || p.category)})`
                   }
-                  renderStatus={(p) => String(p.approval_status)}
+                  renderStatus={(p) => `${String(p.lifecycle_status || p.approval_status)} (${String(p.approval_status)})`}
                   renderExtra={(p) => {
                     const id = Number(p.id);
                     const avail = String(p.availability_status || 'available');
+                    const lifecycle = String(p.lifecycle_status || 'submitted');
                     return (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
-                        <span className="font-mono text-slate-500">
-                          Stock: {String(p.stock_qty)} · Fulfillment: {String(p.delivery_method || 'digital')} · Status:{' '}
+                      <div className="mt-1.5 space-y-2 text-[11px]">
+                        <div className="font-mono text-slate-500">
+                          Stock: {String(p.stock_qty)} · v{String(p.version || '1.0.0')}
+                          {p.file_format ? ` · ${String(p.file_format)}` : ''}
+                          {p.malware_scan_status ? ` · Scan: ${String(p.malware_scan_status)}` : ''}
+                          {typeof p.download_count === 'number' ? ` · Downloads: ${p.download_count}` : ''} · Avail:{' '}
                           <strong className="uppercase">{avail}</strong>
-                        </span>
-                        {(['available', 'limited', 'out_of_stock'] as const).map((st) => (
-                          <button
-                            key={st}
-                            type="button"
-                            onClick={() =>
-                              mutate(
-                                `/api/admin/products/${id}/availability`,
-                                'PATCH',
-                                { availabilityStatus: st },
-                                `Inventory status updated to ${st}.`
-                              )
-                            }
-                            className={`px-2 py-0.5 rounded border font-mono cursor-pointer ${
-                              avail === st
-                                ? 'border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-semibold'
-                                : 'border-slate-300 dark:border-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                            }`}
-                          >
-                            {st}
-                          </button>
-                        ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-slate-400">Lifecycle:</span>
+                          {[
+                            { state: 'awaiting_file_verification', label: 'Verify License' },
+                            { state: 'published', label: 'Verify File & Publish' },
+                            { state: 'suspended', label: 'Suspend' },
+                            { state: 'out_of_stock', label: 'Out of Stock' },
+                            { state: 'archived', label: 'Archive' },
+                          ].map((act) => (
+                            <button
+                              key={act.state}
+                              type="button"
+                              onClick={() =>
+                                mutate(
+                                  `/api/admin/products/${id}`,
+                                  'PATCH',
+                                  { lifecycleStatus: act.state },
+                                  `Product lifecycle moved to ${act.state}.`
+                                )
+                              }
+                              className={`px-2 py-0.5 rounded border font-mono cursor-pointer ${
+                                lifecycle === act.state
+                                  ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-semibold'
+                                  : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-amber-500'
+                              }`}
+                            >
+                              {act.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     );
                   }}
@@ -817,6 +967,20 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                               }
                               className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono"
                             />
+                            <div className="flex flex-wrap gap-1.5 mt-1.5">
+                              {['gemini-4-hydrogen', 'gemini-4-argon', 'gemini-2.5-flash'].map((preset) => (
+                                <button
+                                  key={preset}
+                                  type="button"
+                                  onClick={() =>
+                                    setAiMonitor((p) => (p ? { ...p, config: { ...p.config, model: preset } } : p))
+                                  }
+                                  className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 text-[10px] font-mono text-slate-600 dark:text-slate-300 hover:border-amber-500 cursor-pointer"
+                                >
+                                  {preset}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                           <div>
                             <label className="block text-xs font-medium mb-1">Daily Student Rate Limit (Prompts/Day)</label>
@@ -920,7 +1084,7 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                       Verified Inventory & Authorized Feed Publisher
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Publish only genuine owned inventory, authorized supplier feeds, confirmed institutional opportunities, or complete 15-point curricula with recorded provenance.
+                      Publish only genuine owned inventory, authorized supplier feeds, confirmed institutional opportunities, or complete 22-point curricula with recorded provenance.
                     </p>
                   </div>
 
@@ -1193,6 +1357,36 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                           />
                         </div>
                       </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div>
+                          <label className="block text-xs font-medium mb-1">IFIOK DIGITAL Version Tag</label>
+                          <input
+                            type="text"
+                            value={pubProductVersion}
+                            onChange={(e) => setPubProductVersion(e.target.value)}
+                            placeholder="1.0.0"
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Private Binary Asset Vault (PDF/ZIP/DOCX/MP4)</label>
+                          <input
+                            type="file"
+                            accept=".pdf,.zip,.docx,.xlsx,.pptx,.mp3,.mp4,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleUploadPubProductFile(f);
+                            }}
+                            className="text-xs"
+                          />
+                          {uploadingPubFile && <span className="block text-[11px] text-slate-500 mt-1">Scanning...</span>}
+                          {pubFileMeta && (
+                            <span className="block font-mono text-[11px] text-emerald-600 mt-1">
+                              {pubFileMeta.originalName} ({pubFileMeta.fileFormat})
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   )}
 
@@ -1212,7 +1406,7 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                   {pubType === 'course' && (
                     <div className="space-y-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-4">
                       <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                        15-Point Paid Course Curriculum Requirements (Required when Pi Price &gt; 0)
+                        22-Point Paid Course Curriculum Requirements (Required when Pi Price &gt; 0)
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
@@ -1240,7 +1434,7 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium mb-1">Learning Objectives (1 per line)</label>
+                          <label className="block text-xs font-medium mb-1">Learning Objectives (2+ lines)</label>
                           <textarea
                             rows={2}
                             value={pubObjectivesText}
@@ -1268,6 +1462,15 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                           />
                         </div>
                         <div>
+                          <label className="block text-xs font-medium mb-1">Practical Workbooks &amp; Exercises (1+ line)</label>
+                          <textarea
+                            rows={2}
+                            value={pubWorkbooksText}
+                            onChange={(e) => setPubWorkbooksText(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
                           <label className="block text-xs font-medium mb-1">Assignments / Projects (1 per line)</label>
                           <textarea
                             rows={2}
@@ -1286,7 +1489,25 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium mb-1">Exam & Marking Guide</label>
+                          <label className="block text-xs font-medium mb-1">Examination Questions (1+ line)</label>
+                          <textarea
+                            rows={2}
+                            value={pubExamQuestionsText}
+                            onChange={(e) => setPubExamQuestionsText(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Answer Keys (min 10 chars)</label>
+                          <textarea
+                            rows={2}
+                            value={pubAnswerKeysText}
+                            onChange={(e) => setPubAnswerKeysText(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Marking Guide &amp; Rubric</label>
                           <textarea
                             rows={2}
                             value={pubExamGuide}
@@ -1304,11 +1525,20 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium mb-1">Prerequisites & Audience</label>
+                          <label className="block text-xs font-medium mb-1">Prerequisites</label>
                           <input
                             type="text"
                             value={pubPrerequisites}
                             onChange={(e) => setPubPrerequisites(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Target Audience / Grade Level</label>
+                          <input
+                            type="text"
+                            value={pubTargetAudience}
+                            onChange={(e) => setPubTargetAudience(e.target.value)}
                             className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
                           />
                         </div>
@@ -1329,6 +1559,28 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                             onChange={(e) => setPubCertificateCriteria(e.target.value)}
                             className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-2 text-xs"
                           />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-medium mb-1">Attach Encrypted Course Files (PDF/DOCX/PPTX/ZIP/MP4)</label>
+                          <input
+                            type="file"
+                            accept=".pdf,.zip,.docx,.xlsx,.pptx,.mp3,.mp4,.txt,.md,.csv"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleUploadPubCourseFile(f);
+                            }}
+                            className="text-xs"
+                          />
+                          {uploadingPubCourseFile && <span className="ml-2 text-xs text-slate-500">Scanning...</span>}
+                          {pubCourseFiles.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-1.5">
+                              {pubCourseFiles.map((cf) => (
+                                <span key={cf.storageKey} className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 font-mono text-[11px]">
+                                  {cf.originalName}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1398,6 +1650,35 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                     className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
                   >
                     Publish Verified Entry
+                  </button>
+                </form>
+
+                {/* Batch Verified IFIOK DIGITAL JSON Import */}
+                <form
+                  onSubmit={handleImportBatch}
+                  className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-4"
+                >
+                  <div>
+                    <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                      Batch Verified IFIOK DIGITAL Import (JSON)
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      Import up to 100 licensed digital products at once. Each entry must include title, description, positive pricePi, sourceOrigin, distributionPermission, and refundSupportTerms.
+                    </p>
+                  </div>
+                  <textarea
+                    rows={4}
+                    value={batchJsonText}
+                    onChange={(e) => setBatchJsonText(e.target.value)}
+                    placeholder='[{"title": "...", "category": "Digital Books & eBooks", "marketSuite": "digital_learning_publishing", "pricePi": 5, "sourceOrigin": "Authorized Publisher", "distributionPermission": "Commercial License", "refundSupportTerms": "14-day Pi dispute support", "description": "..."}]'
+                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs font-mono"
+                  />
+                  <button
+                    type="submit"
+                    disabled={batchImporting || !batchJsonText.trim()}
+                    className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    {batchImporting ? 'Importing Batch...' : 'Import Verified Digital Batch'}
                   </button>
                 </form>
 
@@ -1775,6 +2056,42 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                               <td className="py-3 px-4 font-mono">
                                 {ptp.txid ? `${String(ptp.txid).slice(0, 14)}...` : '—'}
                               </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <h2 className="font-display font-bold text-lg mb-3">IFIOK DIGITAL Verified Download Audit</h2>
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B]">
+                    <table className="w-full text-left text-xs">
+                      <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                        <tr>
+                          <th className="py-3 px-4">Product</th>
+                          <th className="py-3 px-4">Format</th>
+                          <th className="py-3 px-4">Member</th>
+                          <th className="py-3 px-4">Order</th>
+                          <th className="py-3 px-4">Downloaded At</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {(data.digitalDownloads || []).length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-6 text-center text-slate-500">
+                              No verified digital downloads recorded yet.
+                            </td>
+                          </tr>
+                        ) : (
+                          (data.digitalDownloads || []).map((dl) => (
+                            <tr key={String(dl.id)}>
+                              <td className="py-3 px-4 font-semibold">{String(dl.product_title)}</td>
+                              <td className="py-3 px-4 font-mono">{String(dl.file_format || '—')}</td>
+                              <td className="py-3 px-4">{String(dl.user_name || dl.user_email)}</td>
+                              <td className="py-3 px-4 font-mono">#{String(dl.order_id)}</td>
+                              <td className="py-3 px-4 font-mono">{String(dl.downloaded_at)}</td>
                             </tr>
                           ))
                         )}

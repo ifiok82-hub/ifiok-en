@@ -4,6 +4,7 @@ import {
   Bot,
   Building2,
   CheckCircle2,
+  Download,
   GraduationCap,
   Languages,
   Lock,
@@ -156,8 +157,28 @@ export function GlobalAcademyHub({
     }
   };
 
+  const handleDownloadCourseFile = async (courseId: number, storageKey: string) => {
+    try {
+      const res = await apiRequest<{ downloadUrl: string; fileName: string }>(
+        `/api/payments/entitlements/course/${courseId}/download-token`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ fileKey: storageKey }),
+        }
+      );
+      const a = document.createElement('a');
+      a.href = res.downloadUrl;
+      a.download = res.fileName || 'course-material';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      onNotify('err', err instanceof Error ? err.message : 'Unable to generate download link.');
+    }
+  };
+
   const subTabs: Array<{ id: AcademySubView; label: string; icon: typeof BookOpen }> = [
-    { id: 'courses', label: `Courses & 17 ${t.academicTerms.subject}s`, icon: BookOpen },
+    { id: 'courses', label: `Courses & 20 ${t.academicTerms.subject}s`, icon: BookOpen },
     { id: 'student_portal', label: 'IFIOK Student Portal', icon: GraduationCap },
     { id: 'teacher_portal', label: 'IFIOK Teacher Portal', icon: Users },
     { id: 'schools', label: t.schoolPortalTitle, icon: Building2 },
@@ -189,7 +210,7 @@ export function GlobalAcademyHub({
               {t.schoolDivisionName || 'IFIOK SCHOOL — Global Digital Learning'}
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Comprehensive multilingual education, institutional school administration, teacher tools, guardian oversight, 15-point verified curricula, and IFIOK Professor AI across {getLanguageAvailabilitySummary().fullUiLanguagesCount} verified languages.
+              Comprehensive multilingual education, institutional school administration, teacher tools, guardian oversight, 22-point verified curricula, and IFIOK Professor AI across {getLanguageAvailabilitySummary().fullUiLanguagesCount} verified languages.
             </p>
           </div>
           <label className="inline-flex items-center gap-1.5 text-xs text-slate-200 bg-white/10 rounded-lg px-3 py-2 border border-white/15">
@@ -243,15 +264,15 @@ export function GlobalAcademyHub({
         </div>
       </div>
 
-      {/* VIEW 1: 17 SUBJECTS & COURSES CATALOG */}
+      {/* VIEW 1: 20 SUBJECTS & COURSES CATALOG */}
       {subView === 'courses' && (
         <div className="space-y-6">
-          {/* 17 Academic Subjects Directory */}
+          {/* 20 Academic Subjects Directory */}
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-5 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="font-display font-bold text-sm text-slate-950 dark:text-white">
-                  17 Global Academic & Career Subjects
+                  20 Global Academic & Career Subjects
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   Select a subject to filter approved curricula or study directly with IFIOK Professor.
@@ -305,7 +326,7 @@ export function GlobalAcademyHub({
                 No published courses in this filter yet
               </h3>
               <p className="text-sm text-slate-500 dark:text-slate-400 max-w-lg mx-auto leading-relaxed">
-                IFIOK SCHOOL strictly publishes verified curricula from approved instructors and institutions. You can start studying {subjectFilter === 'All' ? 'any of our 17 subjects' : subjectFilter} immediately with IFIOK Professor or publish a verified course.
+                IFIOK SCHOOL strictly publishes verified curricula from approved instructors and institutions. You can start studying {subjectFilter === 'All' ? 'any of our 20 subjects' : subjectFilter} immediately with IFIOK Professor or publish a verified course.
               </p>
               <div className="flex flex-wrap justify-center gap-3 pt-2">
                 <button
@@ -364,7 +385,7 @@ export function GlobalAcademyHub({
                           )}
                           <div>Issuing Org: {c.issuing_organization || 'IFIOK SCHOOL'}</div>
                           <div>
-                            Curriculum Completeness: {c.completeness_score ?? 0}/{c.completeness_total ?? 15} sections
+                            Curriculum Completeness: <span className="font-mono tabular-nums">{c.completeness_score ?? 0}/{c.completeness_total ?? 22}</span> sections
                           </div>
                           <div>
                             Source: {c.source_origin || 'Authorized Material'}
@@ -586,8 +607,22 @@ export function GlobalAcademyHub({
                         const slides = JSON.parse(classroom.course.slides_resources_json || '[]') as string[];
                         const assigns = JSON.parse(classroom.course.assignments_json || '[]') as string[];
                         const quizzes = JSON.parse(classroom.course.quizzes_json || '[]') as string[];
+                        const workbooks = JSON.parse(classroom.course.workbooks_exercises_json || '[]') as string[];
+                        const examQuestions = JSON.parse(classroom.course.exam_questions_json || '[]') as string[];
+                        const courseFiles = JSON.parse(classroom.course.course_files_json || '[]') as Array<{
+                          storageKey: string;
+                          originalName: string;
+                          fileFormat?: string;
+                          fileSizeBytes?: number;
+                        }>;
                         return (
                           <div className="space-y-2.5 text-xs border-t border-emerald-200 dark:border-emerald-800 pt-2.5">
+                            {classroom.course.target_audience && (
+                              <div>
+                                <div className="font-semibold mb-0.5">Target Audience</div>
+                                <p className="text-slate-700 dark:text-slate-200">{classroom.course.target_audience}</p>
+                              </div>
+                            )}
                             {modNotes.length > 0 && (
                               <div>
                                 <div className="font-semibold mb-1">Module Lesson Notes ({modNotes.length})</div>
@@ -606,6 +641,12 @@ export function GlobalAcademyHub({
                                 <ul className="list-disc list-inside">{slides.map((s, i) => <li key={`sl-${i}`}>{s}</li>)}</ul>
                               </div>
                             )}
+                            {workbooks.length > 0 && (
+                              <div>
+                                <div className="font-semibold mb-1">Practice Workbooks & Exercises ({workbooks.length})</div>
+                                <ul className="list-disc list-inside">{workbooks.map((w, i) => <li key={`wb-${i}`}>{w}</li>)}</ul>
+                              </div>
+                            )}
                             {assigns.length > 0 && (
                               <div>
                                 <div className="font-semibold mb-1">Assignments & Exercises ({assigns.length})</div>
@@ -618,10 +659,41 @@ export function GlobalAcademyHub({
                                 <ul className="list-disc list-inside">{quizzes.map((q, i) => <li key={`qz-${i}`}>{q}</li>)}</ul>
                               </div>
                             )}
+                            {examQuestions.length > 0 && (
+                              <div>
+                                <div className="font-semibold mb-1">Structured Examination Questions ({examQuestions.length})</div>
+                                <ul className="list-disc list-inside">{examQuestions.map((eq, i) => <li key={`eq-${i}`}>{eq}</li>)}</ul>
+                              </div>
+                            )}
                             {classroom.course.exam_marking_guide && (
                               <div>
-                                <div className="font-semibold mb-1">Examination Questions & Marking Guide</div>
+                                <div className="font-semibold mb-1">Examination Marking Guide</div>
                                 <p className="whitespace-pre-wrap text-slate-700 dark:text-slate-200">{classroom.course.exam_marking_guide}</p>
+                              </div>
+                            )}
+                            {classroom.course.answer_keys_text && (
+                              <div>
+                                <div className="font-semibold mb-1">Verified Answer Keys</div>
+                                <p className="whitespace-pre-wrap text-slate-700 dark:text-slate-200">{classroom.course.answer_keys_text}</p>
+                              </div>
+                            )}
+                            {courseFiles.length > 0 && (
+                              <div className="pt-2 border-t border-emerald-200 dark:border-emerald-800 space-y-1.5">
+                                <div className="font-semibold">Encrypted Course Vault Files ({courseFiles.length})</div>
+                                <div className="flex flex-wrap gap-2">
+                                  {courseFiles.map((cf) => (
+                                    <button
+                                      key={cf.storageKey}
+                                      type="button"
+                                      onClick={() => handleDownloadCourseFile(classroom.course.id, cf.storageKey)}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 font-semibold cursor-pointer"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                      <span>{cf.originalName}</span>
+                                      {cf.fileFormat && <span className="font-mono uppercase opacity-80">({cf.fileFormat})</span>}
+                                    </button>
+                                  ))}
+                                </div>
                               </div>
                             )}
                           </div>

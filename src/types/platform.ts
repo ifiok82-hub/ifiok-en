@@ -132,6 +132,12 @@ export interface Course {
   assignments_json?: string;
   quizzes_json?: string;
   exam_marking_guide?: string;
+  workbooks_exercises_json?: string;
+  exam_questions_json?: string;
+  answer_keys_text?: string;
+  target_audience?: string;
+  course_files_json?: string;
+  course_files_count?: number;
   instructor_qualifications_snapshot?: string;
   prerequisites?: string;
   copyright_permission?: string;
@@ -157,6 +163,13 @@ export interface Course {
   avg_rating?: number | null;
   review_count?: number;
   created_at: string;
+}
+
+export interface CourseCompletenessResult {
+  score: number;
+  total: number;
+  complete: boolean;
+  missing: string[];
 }
 
 export interface BusinessProfile {
@@ -243,6 +256,17 @@ export interface Product {
   stock_qty: number;
   image_url?: string;
   approval_status: string;
+  lifecycle_status?:
+    | 'draft'
+    | 'submitted'
+    | 'awaiting_license_verification'
+    | 'awaiting_file_verification'
+    | 'approved'
+    | 'published'
+    | 'suspended'
+    | 'out_of_stock'
+    | 'archived'
+    | string;
   moderation_action?: string;
   review_notes?: string;
   source_origin?: string;
@@ -253,6 +277,16 @@ export interface Product {
   availability_status?: string;
   last_verified_at?: string | null;
   has_locked_content?: number;
+  file_original_name?: string | null;
+  file_format?: string | null;
+  file_size_bytes?: number;
+  malware_scan_status?: string | null;
+  version?: string;
+  preview_images_json?: string;
+  support_info?: string;
+  creator_ownership_attested?: number;
+  download_count?: number;
+  has_file?: boolean;
   avg_rating?: number | null;
   review_count?: number;
   created_at: string;

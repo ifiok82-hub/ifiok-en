@@ -4,10 +4,12 @@ import {
   Calendar,
   CheckCircle2,
   ClipboardCheck,
+  FileText,
   GraduationCap,
   Lock,
   MessageSquare,
   Plus,
+  Printer,
   ShieldCheck,
   Users,
   X,
@@ -118,6 +120,14 @@ interface SchoolWorkspaceData {
     title: string;
     message: string;
     created_at: string;
+  }>;
+  sessions?: Array<{
+    id: number;
+    name: string;
+    term_label: string;
+    start_date: string;
+    end_date: string;
+    is_active: number;
   }>;
 }
 
@@ -268,6 +278,32 @@ export function SchoolManagementPortal({
   const [commTitle, setCommTitle] = useState('');
   const [commMsg, setCommMsg] = useState('');
 
+  // Academic Session / Term form
+  const [sessName, setSessName] = useState('2026/2027');
+  const [sessTerm, setSessTerm] = useState('Term 1');
+  const [sessStart, setSessStart] = useState('2026-09-01');
+  const [sessEnd, setSessEnd] = useState('2026-12-18');
+  const [sessActive, setSessActive] = useState(true);
+
+  // Printable Report Card Modal
+  const [reportCard, setReportCard] = useState<{
+    school: { name: string; country: string; city: string; accreditation_note: string };
+    student: { full_name: string; email: string | null; age_group: string };
+    summary: {
+      overallAverage: number | null;
+      gradedAssessments: number;
+      attendancePresent: number;
+      attendanceTotal: number;
+    };
+    subjects: Array<{
+      subject: string;
+      gradedCount: number;
+      averagePct: number | null;
+      assignments: Array<{ title: string; score: number | null; maxScore: number; feedback: string }>;
+    }>;
+  } | null>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+
   const loadMySchools = useCallback(async () => {
     if (!user) {
       setSchools([]);
@@ -358,6 +394,58 @@ export function SchoolManagementPortal({
       setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Upload rejected.' });
     } finally {
       setUploadingDoc(false);
+    }
+  };
+
+  const handleUploadPrivateLessonDoc = async (file: File) => {
+    setUploadingDoc(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read document.'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiRequest<{ storageKey: string; originalName: string; fileFormat: string }>(
+        '/api/uploads/course-material',
+        {
+          method: 'POST',
+          body: JSON.stringify({ fileName: file.name, mimeType: file.type, dataBase64: base64 }),
+        }
+      );
+      setLessonMaterialUrl(`/api/uploads/school-material/${encodeURIComponent(res.storageKey)}`);
+      setNotice({ type: 'ok', text: `Private lesson material scanned and stored: ${res.originalName} (${res.fileFormat}).` });
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Document upload rejected.' });
+    } finally {
+      setUploadingDoc(false);
+    }
+  };
+
+  const handleOpenReportCard = async (schoolId: number, studentUserId: number) => {
+    setLoadingReport(true);
+    try {
+      const res = await apiRequest<{
+        school: { name: string; country: string; city: string; accreditation_note: string };
+        student: { full_name: string; email: string | null; age_group: string };
+        summary: {
+          overallAverage: number | null;
+          gradedAssessments: number;
+          attendancePresent: number;
+          attendanceTotal: number;
+        };
+        subjects: Array<{
+          subject: string;
+          gradedCount: number;
+          averagePct: number | null;
+          assignments: Array<{ title: string; score: number | null; maxScore: number; feedback: string }>;
+        }>;
+      }>(`/api/academy/schools/${schoolId}/report-card/${studentUserId}`);
+      setReportCard(res);
+    } catch (err) {
+      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Unable to load report card.' });
+    } finally {
+      setLoadingReport(false);
     }
   };
 
@@ -529,9 +617,19 @@ export function SchoolManagementPortal({
                   <div className="font-semibold text-sm text-slate-900 dark:text-white">{w.student_name}</div>
                   <div className="text-slate-500">{w.school_name}</div>
                 </div>
-                <div className="font-mono text-slate-700 dark:text-amber-400">
-                  Attendance: {w.present_count}/{w.attendance_total} · Avg Grade:{' '}
-                  {w.avg_score !== null ? `${w.avg_score}%` : '—'}
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="font-mono text-slate-700 dark:text-amber-400 tabular-nums">
+                    Attendance: {w.present_count}/{w.attendance_total} · Avg Grade:{' '}
+                    {w.avg_score !== null ? `${w.avg_score}%` : '—'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenReportCard(w.school_id, w.student_user_id)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 font-semibold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Report Card</span>
+                  </button>
                 </div>
               </div>
             ))}
@@ -643,11 +741,44 @@ export function SchoolManagementPortal({
 
           {/* TAB: OVERVIEW & NOTICES */}
           {wsTab === 'overview' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              <div className="lg:col-span-7 space-y-4">
-                <h4 className="font-display font-bold text-base text-slate-950 dark:text-white">
-                  School Announcements & Communications
-                </h4>
+            <div className="space-y-6">
+              {(workspace.myRoles.includes('student') || (workspace.sessions && workspace.sessions.length > 0)) && (
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="space-y-1">
+                    <div className="font-semibold text-slate-950 dark:text-white">
+                      Academic Sessions & Student Transcript
+                    </div>
+                    {workspace.sessions && workspace.sessions.length > 0 ? (
+                      <div className="flex flex-wrap gap-3 text-slate-600 dark:text-slate-300">
+                        {workspace.sessions.map((s) => (
+                          <span key={s.id} className="font-mono">
+                            {s.name} · {s.term_label} ({s.start_date} – {s.end_date})
+                            {s.is_active ? ' [ACTIVE]' : ''}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-slate-500">No academic sessions configured yet.</span>
+                    )}
+                  </div>
+                  {workspace.myRoles.includes('student') && (
+                    <button
+                      type="button"
+                      disabled={loadingReport}
+                      onClick={() => handleOpenReportCard(selectedSchoolId, user.id)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>{loadingReport ? 'Loading...' : 'View / Print My Report Card'}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-7 space-y-4">
+                  <h4 className="font-display font-bold text-base text-slate-950 dark:text-white">
+                    School Announcements & Communications
+                  </h4>
                 {workspace.communications.length === 0 ? (
                   <p className="text-xs text-slate-500">No announcements published yet.</p>
                 ) : (
@@ -731,6 +862,7 @@ export function SchoolManagementPortal({
                   </form>
                 </div>
               )}
+              </div>
             </div>
           )}
 
@@ -785,6 +917,41 @@ export function SchoolManagementPortal({
                     ))}
                   </div>
                 )}
+
+                {/* Class Timetable & Lesson Schedule Grid */}
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-5 space-y-3">
+                  <h4 className="font-display font-bold text-sm text-slate-950 dark:text-white">
+                    Class Timetable & Teaching Schedule
+                  </h4>
+                  {workspace.classes.length === 0 ? (
+                    <p className="text-xs text-slate-500">No classes scheduled yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                          <tr>
+                            <th className="py-2 pr-4">Class</th>
+                            <th className="py-2 pr-4">Subject</th>
+                            <th className="py-2 pr-4">Grade</th>
+                            <th className="py-2 pr-4">Instructor</th>
+                            <th className="py-2">Schedule</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                          {workspace.classes.map((cls) => (
+                            <tr key={cls.id}>
+                              <td className="py-2 pr-4 font-semibold">{cls.name}</td>
+                              <td className="py-2 pr-4">{cls.subject}</td>
+                              <td className="py-2 pr-4">{cls.grade_level}</td>
+                              <td className="py-2 pr-4">{cls.teacher_name || 'Assigned Staff'}</td>
+                              <td className="py-2 font-mono">{cls.schedule_summary || 'Flexible / Self-Paced'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {workspace.isStaff && (
@@ -880,17 +1047,27 @@ export function SchoolManagementPortal({
                             className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
                           />
                         </div>
-                        <div>
-                          <label className="block text-xs font-medium mb-1">Upload Visual/Diagram (Optional)</label>
+                        <div className="space-y-2">
+                          <label className="block text-xs font-medium">Upload Lesson Material (PDF / DOCX / PPTX / Visual, Scanned)</label>
                           <input
                             type="file"
-                            accept="image/png,image/jpeg,image/webp"
+                            accept=".pdf,.docx,.pptx,.txt,.md,image/png,image/jpeg,image/webp"
                             onChange={(e) => {
                               const f = e.target.files?.[0];
-                              if (f) handleUploadFile(f, setLessonMaterialUrl);
+                              if (!f) return;
+                              if (f.type.startsWith('image/')) {
+                                handleUploadFile(f, setLessonMaterialUrl);
+                              } else {
+                                handleUploadPrivateLessonDoc(f);
+                              }
                             }}
                             className="text-xs"
                           />
+                          {lessonMaterialUrl && (
+                            <div className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400 truncate">
+                              Attached: {lessonMaterialUrl}
+                            </div>
+                          )}
                         </div>
                         <button
                           type="submit"
@@ -1619,6 +1796,81 @@ export function SchoolManagementPortal({
                 </div>
               )}
 
+              {workspace.isSchoolAdmin && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    mutateSchool(
+                      '/sessions',
+                      {
+                        name: sessName,
+                        termLabel: sessTerm,
+                        startDate: sessStart,
+                        endDate: sessEnd,
+                        isActive: sessActive,
+                      },
+                      'Academic session / term saved.'
+                    );
+                  }}
+                  className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-5 space-y-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="font-display font-bold text-sm">4. Academic Sessions & Terms</h4>
+                    {workspace.sessions && workspace.sessions.length > 0 && (
+                      <span className="font-mono text-[11px] text-slate-500">
+                        {workspace.sessions.length} Term(s) Configured
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+                    <input
+                      type="text"
+                      required
+                      value={sessName}
+                      onChange={(e) => setSessName(e.target.value)}
+                      placeholder="2026/2027 Session"
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                    />
+                    <input
+                      type="text"
+                      required
+                      value={sessTerm}
+                      onChange={(e) => setSessTerm(e.target.value)}
+                      placeholder="Term 1"
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                    />
+                    <input
+                      type="date"
+                      required
+                      value={sessStart}
+                      onChange={(e) => setSessStart(e.target.value)}
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs font-mono"
+                    />
+                    <input
+                      type="date"
+                      required
+                      value={sessEnd}
+                      onChange={(e) => setSessEnd(e.target.value)}
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs font-mono"
+                    />
+                    <button
+                      type="submit"
+                      className="py-2 px-4 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                    >
+                      Save Session
+                    </button>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={sessActive}
+                      onChange={(e) => setSessActive(e.target.checked)}
+                    />
+                    <span>Set as current active academic term</span>
+                  </label>
+                </form>
+              )}
+
               {/* Roster Table */}
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-x-auto">
                 <table className="w-full text-left text-xs">
@@ -1628,6 +1880,7 @@ export function SchoolManagementPortal({
                       <th className="py-3 px-4">Role</th>
                       <th className="py-3 px-4">Class / Ward</th>
                       <th className="py-3 px-4">Age Safety Tier</th>
+                      <th className="py-3 px-4 text-right">Transcript</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -1640,6 +1893,18 @@ export function SchoolManagementPortal({
                         <td className="py-3 px-4 font-mono uppercase">{r.member_role}</td>
                         <td className="py-3 px-4">{r.ward_name ? `Ward: ${r.ward_name}` : r.class_name || '—'}</td>
                         <td className="py-3 px-4 font-mono">{r.age_group}</td>
+                        <td className="py-3 px-4 text-right">
+                          {r.member_role === 'student' && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenReportCard(selectedSchoolId, r.user_id)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 font-semibold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>Report Card</span>
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1776,6 +2041,99 @@ export function SchoolManagementPortal({
                 Submit Institution Application
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Printable Student Report Card Modal */}
+      {reportCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 overflow-y-auto">
+          <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-[#0D152B] border border-slate-200 dark:border-slate-800 p-6 space-y-5 my-8">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
+              <div>
+                <div className="text-xs font-mono uppercase text-purple-700 dark:text-amber-400">
+                  IFIOK SCHOOL — Official Term Report Card
+                </div>
+                <h3 className="text-xl font-display font-bold text-slate-950 dark:text-white mt-0.5">
+                  {reportCard.student.full_name}
+                </h3>
+                <div className="text-xs text-slate-500">
+                  {reportCard.school.name} · {reportCard.school.city ? `${reportCard.school.city}, ` : ''}
+                  {reportCard.school.country}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print</span>
+                </button>
+                <button type="button" onClick={() => setReportCard(null)} className="cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 text-xs">
+              <div className="rounded-lg bg-slate-50 dark:bg-[#081024] p-3 border border-slate-200 dark:border-slate-800">
+                <div className="font-mono font-bold text-lg tabular-nums">
+                  {reportCard.summary.overallAverage !== null ? `${reportCard.summary.overallAverage}%` : '—'}
+                </div>
+                <div className="text-slate-500">Overall Average</div>
+              </div>
+              <div className="rounded-lg bg-slate-50 dark:bg-[#081024] p-3 border border-slate-200 dark:border-slate-800">
+                <div className="font-mono font-bold text-lg tabular-nums">
+                  {reportCard.summary.gradedAssessments}
+                </div>
+                <div className="text-slate-500">Graded Assessments</div>
+              </div>
+              <div className="rounded-lg bg-slate-50 dark:bg-[#081024] p-3 border border-slate-200 dark:border-slate-800">
+                <div className="font-mono font-bold text-lg tabular-nums">
+                  {reportCard.summary.attendancePresent}/{reportCard.summary.attendanceTotal}
+                </div>
+                <div className="text-slate-500">Attendance Present</div>
+              </div>
+            </div>
+
+            {reportCard.subjects.length === 0 ? (
+              <p className="text-xs text-slate-500">No graded subject assessments recorded yet for this student.</p>
+            ) : (
+              <div className="space-y-3">
+                {reportCard.subjects.map((sub) => (
+                  <div
+                    key={sub.subject}
+                    className="rounded-lg border border-slate-200 dark:border-slate-800 p-4 space-y-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between font-semibold text-slate-950 dark:text-white">
+                      <span>{sub.subject}</span>
+                      <span className="font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                        {sub.averagePct !== null ? `${sub.averagePct}%` : 'Pending'} ({sub.gradedCount} graded)
+                      </span>
+                    </div>
+                    <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                      {sub.assignments.map((a, idx) => (
+                        <div key={`${a.title}-${idx}`} className="py-1.5 flex items-center justify-between gap-3">
+                          <div>
+                            <div className="font-medium">{a.title}</div>
+                            {a.feedback && <div className="text-slate-500">{a.feedback}</div>}
+                          </div>
+                          <div className="font-mono tabular-nums shrink-0">
+                            {a.score !== null ? `${a.score}/${a.maxScore}` : 'Ungraded'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="text-[11px] text-slate-500 border-t border-slate-200 dark:border-slate-800 pt-3">
+              {reportCard.school.accreditation_note}
+            </p>
           </div>
         </div>
       )}

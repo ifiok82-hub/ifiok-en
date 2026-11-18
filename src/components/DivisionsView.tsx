@@ -4,6 +4,7 @@ import {
   Briefcase,
   Building2,
   CheckCircle2,
+  Download,
   Flag,
   Lock,
   MessageSquare,
@@ -27,6 +28,7 @@ import {
   DELIVERY_METHODS,
   formatPiPrice,
   FREELANCE_CATEGORIES,
+  IFIOK_DIGITAL_CATEGORIES,
   LANGUAGE_OPTIONS,
   MARKET_SUITES,
   OPPORTUNITY_TYPES,
@@ -138,7 +140,20 @@ export function DivisionsView({
   const [fSourceUrl, setFSourceUrl] = useState('');
   const [fLockedContent, setFLockedContent] = useState('');
   const [uploadingImg, setUploadingImg] = useState(false);
-  const [unlockedPreview, setUnlockedPreview] = useState<{ title: string; content: string; unlockedAt: string } | null>(null);
+  const [unlockedPreview, setUnlockedPreview] = useState<{
+    itemType: 'product' | 'course';
+    itemId: number;
+    title: string;
+    content: string;
+    unlockedAt: string;
+    hasFile?: boolean;
+    fileOriginalName?: string;
+    fileFormat?: string;
+    fileSizeBytes?: number;
+    version?: string;
+    courseFiles?: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }>;
+  } | null>(null);
+  const [downloadingAsset, setDownloadingAsset] = useState(false);
   const [subMode, setSubMode] = useState<'primary' | 'onboarding'>('primary');
 
   // Expanded division creation fields
@@ -147,23 +162,44 @@ export function DivisionsView({
   const [fDeliveryMethod, setFDeliveryMethod] = useState<string>(DELIVERY_METHODS[0].id);
   const [fDistPermission, setFDistPermission] = useState('');
   const [fRefundTerms, setFRefundTerms] = useState('');
+  const [fProductVersion, setFProductVersion] = useState('1.0.0');
+  const [fSupportInfo, setFSupportInfo] = useState('');
+  const [fOwnershipAttested, setFOwnershipAttested] = useState(true);
+  const [fSubmitLifecycle, setFSubmitLifecycle] = useState<'draft' | 'submitted'>('submitted');
+  const [fProductFile, setFProductFile] = useState<{
+    storageKey: string;
+    originalName: string;
+    fileFormat: string;
+    fileSizeBytes: number;
+    fileSha256: string;
+  } | null>(null);
+  const [uploadingProductFile, setUploadingProductFile] = useState(false);
+
   const [fDeliverables, setFDeliverables] = useState('');
   const [fCredentials, setFCredentials] = useState('');
   const [fEligibility, setFEligibility] = useState('');
   const [fEventDate, setFEventDate] = useState('');
   const [fEventLocation, setFEventLocation] = useState('');
-  // 15-point IFIOK SCHOOL curriculum fields
+  // 22-point IFIOK SCHOOL curriculum fields
   const [fObjectives, setFObjectives] = useState('');
   const [fModulesNotes, setFModulesNotes] = useState('');
   const [fMediaUrl, setFMediaUrl] = useState('');
   const [fSlides, setFSlides] = useState('');
+  const [fWorkbooks, setFWorkbooks] = useState('');
   const [fAssignments, setFAssignments] = useState('');
   const [fQuizzes, setFQuizzes] = useState('');
+  const [fExamQuestions, setFExamQuestions] = useState('');
+  const [fAnswerKeys, setFAnswerKeys] = useState('');
   const [fExamGuide, setFExamGuide] = useState('');
   const [fInstructorQual, setFInstructorQual] = useState('');
   const [fPrerequisites, setFPrerequisites] = useState('');
+  const [fTargetAudience, setFTargetAudience] = useState('');
   const [fCopyright, setFCopyright] = useState('');
   const [fCertCriteria, setFCertCriteria] = useState('');
+  const [fCourseFiles, setFCourseFiles] = useState<
+    Array<{ storageKey: string; originalName: string; fileFormat: string; fileSizeBytes: number; fileSha256: string }>
+  >([]);
+  const [uploadingCourseFile, setUploadingCourseFile] = useState(false);
 
   // Action modal fields
   const [actionNote, setActionNote] = useState('');
@@ -247,6 +283,11 @@ export function DivisionsView({
     setFDeliveryMethod(DELIVERY_METHODS[0].id);
     setFDistPermission('');
     setFRefundTerms('');
+    setFProductVersion('1.0.0');
+    setFSupportInfo('');
+    setFOwnershipAttested(true);
+    setFSubmitLifecycle('submitted');
+    setFProductFile(null);
     setFDeliverables('');
     setFCredentials('');
     setFEligibility('');
@@ -256,13 +297,18 @@ export function DivisionsView({
     setFModulesNotes('');
     setFMediaUrl('');
     setFSlides('');
+    setFWorkbooks('');
     setFAssignments('');
     setFQuizzes('');
+    setFExamQuestions('');
+    setFAnswerKeys('');
     setFExamGuide('');
     setFInstructorQual('');
     setFPrerequisites('');
+    setFTargetAudience('');
     setFCopyright('');
     setFCertCriteria('');
+    setFCourseFiles([]);
   };
 
   const handleUploadImage = async (file: File) => {
@@ -287,18 +333,138 @@ export function DivisionsView({
     }
   };
 
+  const handleUploadProductFile = async (file: File) => {
+    setUploadingProductFile(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read selected digital asset.'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiRequest<{
+        storageKey: string;
+        originalName: string;
+        fileFormat: string;
+        fileSizeBytes: number;
+        sha256: string;
+      }>('/api/uploads/digital-asset', {
+        method: 'POST',
+        body: JSON.stringify({ fileName: file.name, dataBase64: base64 }),
+      });
+      setFProductFile({
+        storageKey: res.storageKey,
+        originalName: res.originalName,
+        fileFormat: res.fileFormat,
+        fileSizeBytes: res.fileSizeBytes,
+        fileSha256: res.sha256,
+      });
+      notify('ok', `Digital asset "${res.originalName}" scanned clean and stored in private vault.`);
+    } catch (err) {
+      notify('err', err instanceof Error ? err.message : 'Digital asset rejected by security scan.');
+    } finally {
+      setUploadingProductFile(false);
+    }
+  };
+
+  const handleUploadCourseFile = async (file: File) => {
+    setUploadingCourseFile(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read selected course file.'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiRequest<{
+        storageKey: string;
+        originalName: string;
+        fileFormat: string;
+        fileSizeBytes: number;
+        sha256: string;
+      }>('/api/uploads/course-material', {
+        method: 'POST',
+        body: JSON.stringify({ fileName: file.name, dataBase64: base64 }),
+      });
+      setFCourseFiles((prev) => [
+        ...prev,
+        {
+          storageKey: res.storageKey,
+          originalName: res.originalName,
+          fileFormat: res.fileFormat,
+          fileSizeBytes: res.fileSizeBytes,
+          fileSha256: res.sha256,
+        },
+      ]);
+      notify('ok', `Course material "${res.originalName}" encrypted & attached.`);
+    } catch (err) {
+      notify('err', err instanceof Error ? err.message : 'Course material rejected by security scan.');
+    } finally {
+      setUploadingCourseFile(false);
+    }
+  };
+
   const handleAccessUnlocked = async (itemType: 'product' | 'course', itemId: number) => {
     if (!user) {
       onRequireAuth();
       return;
     }
     try {
-      const res = await apiRequest<{ unlocked: boolean; unlockedAt: string; title: string; content: string }>(
-        `/api/payments/entitlements/${itemType}/${itemId}`
-      );
-      setUnlockedPreview({ title: res.title, content: res.content, unlockedAt: res.unlockedAt });
+      const res = await apiRequest<{
+        unlocked: boolean;
+        unlockedAt: string;
+        title: string;
+        content: string;
+        hasFile?: boolean;
+        fileOriginalName?: string;
+        fileFormat?: string;
+        fileSizeBytes?: number;
+        version?: string;
+        courseFiles?: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }>;
+      }>(`/api/payments/entitlements/${itemType}/${itemId}`);
+      setUnlockedPreview({
+        itemType,
+        itemId,
+        title: res.title,
+        content: res.content,
+        unlockedAt: res.unlockedAt,
+        hasFile: res.hasFile,
+        fileOriginalName: res.fileOriginalName,
+        fileFormat: res.fileFormat,
+        fileSizeBytes: res.fileSizeBytes,
+        version: res.version,
+        courseFiles: res.courseFiles,
+      });
     } catch (err) {
       notify('err', err instanceof Error ? err.message : 'Locked until server confirms Pi payment.');
+    }
+  };
+
+  const handleDownloadEntitlementFile = async (
+    itemType: 'product' | 'course',
+    itemId: number,
+    fileKey?: string
+  ) => {
+    setDownloadingAsset(true);
+    try {
+      const res = await apiRequest<{ downloadUrl: string; fileName: string }>(
+        `/api/payments/entitlements/${itemType}/${itemId}/download-token`,
+        {
+          method: 'POST',
+          body: JSON.stringify(fileKey ? { fileKey } : {}),
+        }
+      );
+      const link = document.createElement('a');
+      link.href = res.downloadUrl;
+      link.download = res.fileName || 'ifiok-digital-asset';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      notify('ok', `Download started for ${res.fileName} (signed 300s single-session token).`);
+    } catch (err) {
+      notify('err', err instanceof Error ? err.message : 'Unable to generate download token.');
+    } finally {
+      setDownloadingAsset(false);
     }
   };
 
@@ -468,22 +634,31 @@ export function DivisionsView({
     const topicCount = parsedModulesNotes.filter((m) => m.topic.length >= 3).length;
     const noteCount = parsedModulesNotes.filter((m) => m.notes.length >= 15).length;
     const slideCount = fSlides.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
+    const workbookCount = fWorkbooks.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
     const assignCount = fAssignments.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
     const quizCount = fQuizzes.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
+    const examQCount = fExamQuestions.split('\n').map((s) => s.trim()).filter((s) => s.length >= 3).length;
     const checks = [
-      fTitle.trim().length >= 5 && fDescription.trim().length >= 20,
+      fTitle.trim().length >= 5,
+      fDescription.trim().length >= 30,
+      fSubject.trim().length >= 2 || fCategory.trim().length >= 2,
       syllabusCount >= 2,
       objCount >= 2,
       topicCount >= 2,
       noteCount >= 1,
       fMediaUrl.trim().length >= 8 || fLockedContent.trim().length >= 12 || noteCount >= 2,
-      slideCount >= 1,
+      slideCount >= 1 || fCourseFiles.length >= 1,
+      workbookCount >= 1,
       assignCount >= 1,
       quizCount >= 1,
-      fExamGuide.trim().length >= 15,
+      examQCount >= 1,
+      fAnswerKeys.trim().length >= 10 && fExamGuide.trim().length >= 12,
       fInstructorQual.trim().length >= 5,
-      Number(fNum2) >= 1 && (fExtra2 || 'Beginner').trim().length >= 3,
-      fCourseLang.length >= 2 && fPrerequisites.trim().length >= 3,
+      Number(fNum2) >= 1,
+      (fExtra2 || 'Beginner').trim().length >= 3,
+      fCourseLang.length >= 2,
+      fPrerequisites.trim().length >= 3,
+      fTargetAudience.trim().length >= 3,
       fCopyright.trim().length >= 5,
       fCertCriteria.trim().length >= 8,
     ];
@@ -508,8 +683,10 @@ export function DivisionsView({
         const syllabus = fExtra1.split('\n').map((s) => s.trim()).filter(Boolean);
         const learningObjectives = fObjectives.split('\n').map((s) => s.trim()).filter(Boolean);
         const slidesResources = fSlides.split('\n').map((s) => s.trim()).filter(Boolean);
+        const workbooksExercises = fWorkbooks.split('\n').map((s) => s.trim()).filter(Boolean);
         const assignments = fAssignments.split('\n').map((s) => s.trim()).filter(Boolean);
         const quizzes = fQuizzes.split('\n').map((s) => s.trim()).filter(Boolean);
+        const examQuestions = fExamQuestions.split('\n').map((s) => s.trim()).filter(Boolean);
         const res = await apiRequest<{ approvalStatus: string }>('/api/divisions/courses', {
           method: 'POST',
           body: JSON.stringify({
@@ -527,20 +704,25 @@ export function DivisionsView({
             modulesNotes: parsedModulesNotes,
             mediaLessonUrl: fMediaUrl,
             slidesResources,
+            workbooksExercises,
             assignments,
             quizzes,
+            examQuestions,
+            answerKeysText: fAnswerKeys,
             examMarkingGuide: fExamGuide,
             instructorQualifications: fInstructorQual,
             prerequisites: fPrerequisites,
+            targetAudience: fTargetAudience,
             copyrightPermission: fCopyright,
             certificateCriteria: fCertCriteria,
+            courseFiles: fCourseFiles,
             imageUrl: fImageUrl,
             sourceOrigin: fSourceOrigin || 'Authorized Educational Material',
             sourceUrl: fSourceUrl,
             lockedMaterials: fLockedContent,
           }),
         });
-        notify('ok', `Course submitted with status: ${res.approvalStatus} (${courseCompletenessPreview}/15 curriculum checklist).`);
+        notify('ok', `Course submitted with status: ${res.approvalStatus} (${courseCompletenessPreview}/22 curriculum checklist).`);
       } else if (activeTab === 'business') {
         const res = await apiRequest<{ verificationStatus: string }>('/api/divisions/businesses', {
           method: 'POST',
@@ -603,7 +785,7 @@ export function DivisionsView({
         });
         notify('ok', `Seller storefront application submitted (${res.verificationStatus}).`);
       } else if (activeTab === 'market') {
-        const res = await apiRequest<{ approvalStatus: string }>('/api/divisions/products', {
+        const res = await apiRequest<{ approvalStatus: string; lifecycleStatus?: string }>('/api/divisions/products', {
           method: 'POST',
           body: JSON.stringify({
             title: fTitle,
@@ -616,13 +798,27 @@ export function DivisionsView({
             deliveryMethod: fDeliveryMethod,
             distributionPermission: fDistPermission,
             refundSupportTerms: fRefundTerms,
+            version: fProductVersion || '1.0.0',
+            supportInfo: fSupportInfo || fRefundTerms,
+            creatorOwnershipAttested: fOwnershipAttested,
+            lifecycleStatus: fSubmitLifecycle,
+            fileStorageKey: fProductFile?.storageKey || '',
+            fileOriginalName: fProductFile?.originalName || '',
+            fileFormat: fProductFile?.fileFormat || '',
+            fileSizeBytes: fProductFile?.fileSizeBytes || 0,
+            fileSha256: fProductFile?.fileSha256 || '',
             imageUrl: fImageUrl,
             sourceOrigin: fSourceOrigin || 'Genuine Seller Submission',
             sourceUrl: fSourceUrl,
             lockedContent: fLockedContent,
           }),
         });
-        notify('ok', `Marketplace listing submitted (${res.approvalStatus}).`);
+        notify(
+          'ok',
+          res.lifecycleStatus === 'draft'
+            ? 'IFIOK DIGITAL draft saved. Submit it for verification from your Member Dashboard when ready.'
+            : `Marketplace listing submitted (${res.lifecycleStatus || res.approvalStatus}).`
+        );
       } else if (activeTab === 'community') {
         await apiRequest('/api/divisions/community/posts', {
           method: 'POST',
@@ -739,7 +935,7 @@ export function DivisionsView({
                 onChange={(e) => setFilterValue(e.target.value)}
                 className="rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm text-slate-900 dark:text-white"
               >
-                <option value="All">All 17 Subjects</option>
+                <option value="All">All 20 Subjects</option>
                 {ACADEMIC_SUBJECTS.map((subj) => (
                   <option key={subj} value={subj}>
                     {subj}
@@ -906,7 +1102,7 @@ export function DivisionsView({
           </div>
         ) : (
           <>
-            {/* ACADEMY (Unified Global Academy Hub: 17 Subjects, IFIOK Professor AI, Virtual Classroom, Schools, Certificates) */}
+            {/* ACADEMY (Unified Global Academy Hub: 20 Subjects, IFIOK Professor AI, Virtual Classroom, Schools, Certificates) */}
             {activeTab === 'academy' && (
               <GlobalAcademyHub
                 user={user}
@@ -1102,22 +1298,43 @@ export function DivisionsView({
               </div>
             )}
 
-            {/* MARKET */}
+            {/* MARKET · IFIOK DIGITAL */}
             {activeTab === 'market' && (
-              <div>
+              <div className="space-y-6">
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-5 flex flex-wrap items-center justify-between gap-4">
+                  <div className="space-y-1 max-w-3xl">
+                    <div className="text-xs font-mono uppercase tracking-wider text-purple-700 dark:text-amber-400">
+                      IFIOK DIGITAL · Official Digital Products Department ({IFIOK_DIGITAL_CATEGORIES.length} Digital Categories)
+                    </div>
+                    <h2 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                      Instant Encrypted Digital Vault &amp; Pi-Only Settlement
+                    </h2>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                      IFIOK-EN prioritizes instant, license-verified digital products across software, eBooks, academic notes, design kits, spreadsheets, and Web3 utilities. All uploaded digital files stay encrypted in private vault storage until Pi Testnet completion issues a signed 300-second download token.
+                    </p>
+                  </div>
+                  <div className="text-xs font-mono text-slate-600 dark:text-slate-300 space-y-1 text-right">
+                    <div>Malware &amp; Signature Scan: Active</div>
+                    <div>Settlement: Exclusive Pi Network (Testnet)</div>
+                  </div>
+                </div>
+
                 {products.length === 0 ? (
                   <EmptyDivisionState
-                    title="No approved marketplace products yet"
+                    title="No approved IFIOK DIGITAL or marketplace products yet"
                     description="IFIOK Market never publishes fake products, synthetic prices, or unverified sellers. Verified creators and authorized partners can register a storefront and list licensed digital suites or genuine goods."
                     actionLabel="Register Seller Storefront"
                     onAction={() => handleOpenCreate('onboarding')}
                   />
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {products.map((p) => {
+                    {[...products]
+                      .sort((a, b) => (a.product_type === 'physical' ? 1 : 0) - (b.product_type === 'physical' ? 1 : 0))
+                      .map((p) => {
                       const price = formatPiPrice(p.price_pi, currency, usdRate);
                       const suiteInfo = MARKET_SUITES.find((ms) => ms.id === p.market_suite);
                       const deliveryLabel = DELIVERY_METHODS.find((dm) => dm.id === p.delivery_method)?.label || p.delivery_method;
+                      const isDigital = p.product_type !== 'physical';
                       return (
                         <article
                           key={p.id}
@@ -1136,9 +1353,10 @@ export function DivisionsView({
                             )}
                             <div className="p-6 space-y-2">
                               <div className="text-xs text-slate-500 dark:text-slate-400">
+                                {isDigital ? 'IFIOK DIGITAL · ' : ''}
                                 {suiteInfo ? `Suite ${suiteInfo.code}: ${suiteInfo.label}` : p.product_type.replace('_', ' ')} · {p.category} ·{' '}
                                 {p.availability_status || 'available'} · Stock {p.stock_qty}
-                                {p.approval_status !== 'approved' && ` · ${p.approval_status}`}
+                                {p.lifecycle_status && p.lifecycle_status !== 'published' ? ` · ${p.lifecycle_status.replace(/_/g, ' ')}` : ''}
                               </div>
                               <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">{p.title}</h3>
                               <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-3">{p.description}</p>
@@ -1146,6 +1364,19 @@ export function DivisionsView({
                                 <div>
                                   Seller: {p.store_name} ({p.seller_country})
                                 </div>
+                                {isDigital && (
+                                  <div className="font-mono text-[11px]">
+                                    v{p.version || '1.0.0'}
+                                    {p.file_format ? ` · ${p.file_format}` : ''}
+                                    {p.file_size_bytes ? ` (${(p.file_size_bytes / 1024).toFixed(0)} KB)` : ''}
+                                    {p.malware_scan_status && p.malware_scan_status !== 'not_uploaded'
+                                      ? ` · Scan: ${p.malware_scan_status}`
+                                      : ''}
+                                    {typeof p.download_count === 'number' && p.download_count > 0
+                                      ? ` · ${p.download_count} downloads`
+                                      : ''}
+                                  </div>
+                                )}
                                 {deliveryLabel && <div>Delivery: {deliveryLabel}</div>}
                                 <div>
                                   Origin: {p.source_origin || 'Seller Submission'}
@@ -1153,7 +1384,7 @@ export function DivisionsView({
                                 </div>
                                 {p.distribution_permission && <div>Rights: {p.distribution_permission}</div>}
                               </div>
-                              {p.product_type !== 'physical' && (
+                              {isDigital && (
                                 <div className="flex items-center justify-between pt-1 text-xs">
                                   <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
                                     <Lock className="w-3.5 h-3.5" /> Locked until Pi verified
@@ -1171,8 +1402,8 @@ export function DivisionsView({
                           </div>
                           <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
                             <div>
-                              <div className="font-mono font-bold text-slate-950 dark:text-amber-400">{price.primary}</div>
-                              {price.reference && <div className="text-[11px] font-mono text-slate-500">{price.reference}</div>}
+                              <div className="font-mono font-bold tabular-nums text-slate-950 dark:text-amber-400">{price.primary}</div>
+                              {price.reference && <div className="text-[11px] font-mono tabular-nums text-slate-500">{price.reference}</div>}
                             </div>
                             <div className="flex items-center gap-2">
                               <button
@@ -1641,6 +1872,61 @@ export function DivisionsView({
                       />
                     </div>
                   </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Version / Release Tag</label>
+                      <input
+                        type="text"
+                        value={fProductVersion}
+                        onChange={(e) => setFProductVersion(e.target.value)}
+                        placeholder="1.0.0"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Buyer Support &amp; Updates Contact</label>
+                      <input
+                        type="text"
+                        value={fSupportInfo}
+                        onChange={(e) => setFSupportInfo(e.target.value)}
+                        placeholder="Lifetime patch updates & 48h ticket support"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-3 space-y-2">
+                    <label className="block text-xs font-medium">
+                      IFIOK DIGITAL Private Asset Vault Upload (PDF, ZIP, DOCX, XLSX, PPTX, MP3, MP4 — max 15 MB, scanned)
+                    </label>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <input
+                        type="file"
+                        accept=".pdf,.zip,.docx,.xlsx,.pptx,.mp3,.mp4,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleUploadProductFile(file);
+                        }}
+                        className="text-xs"
+                      />
+                      {uploadingProductFile && <span className="text-xs text-slate-500">Scanning &amp; encrypting...</span>}
+                      {fProductFile && (
+                        <span className="font-mono text-xs text-emerald-700 dark:text-emerald-400">
+                          {fProductFile.originalName} ({fProductFile.fileFormat} · {(fProductFile.fileSizeBytes / 1024).toFixed(1)} KB)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <label className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={fOwnershipAttested}
+                      onChange={(e) => setFOwnershipAttested(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      I attest that I hold full original copyright or authorized commercial redistribution rights to this product and it contains no malware or pirated assets.
+                    </span>
+                  </label>
                 </div>
               )}
 
@@ -1765,10 +2051,10 @@ export function DivisionsView({
                 <div className="space-y-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-[#081024] p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-slate-900 dark:text-white">
-                      IFIOK SCHOOL 15-Point Paid Course Readiness
+                      IFIOK SCHOOL 22-Point Paid Course Readiness
                     </span>
-                    <span className="font-mono text-xs font-bold text-purple-700 dark:text-amber-400">
-                      {courseCompletenessPreview}/15 checks complete
+                    <span className="font-mono tabular-nums text-xs font-bold text-purple-700 dark:text-amber-400">
+                      {courseCompletenessPreview}/22 checks complete
                     </span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -1905,17 +2191,39 @@ export function DivisionsView({
                       />
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Target Audience / Grade Level</label>
+                    <input
+                      type="text"
+                      value={fTargetAudience}
+                      onChange={(e) => setFTargetAudience(e.target.value)}
+                      placeholder="Secondary School (Grades 10-12), University Undergraduates, or SME Founders"
+                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-medium mb-1">Slides / Resources (1+ line)</label>
                       <textarea
                         rows={2}
                         value={fSlides}
                         onChange={(e) => setFSlides(e.target.value)}
-                        placeholder="Lecture Deck PDF & Workbook"
+                        placeholder="Lecture Deck PDF & Reference Handouts"
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Practical Workbooks &amp; Exercises (1+ line)</label>
+                      <textarea
+                        rows={2}
+                        value={fWorkbooks}
+                        onChange={(e) => setFWorkbooks(e.target.value)}
+                        placeholder="Workbook Exercise 1: Guided Lab Practice"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-medium mb-1">Assignments (1+ line)</label>
                       <textarea
@@ -1936,16 +2244,71 @@ export function DivisionsView({
                         className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Examination Questions (1+ line)</label>
+                      <textarea
+                        rows={2}
+                        value={fExamQuestions}
+                        onChange={(e) => setFExamQuestions(e.target.value)}
+                        placeholder="Final Exam Q1: Core System Design Case"
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium mb-1">Examination Questions & Marking Guide</label>
-                    <textarea
-                      rows={2}
-                      value={fExamGuide}
-                      onChange={(e) => setFExamGuide(e.target.value)}
-                      placeholder="Final assessment rubric, pass threshold (70%), and grading criteria..."
-                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
-                    />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Answer Keys (min 10 chars)</label>
+                      <textarea
+                        rows={2}
+                        value={fAnswerKeys}
+                        onChange={(e) => setFAnswerKeys(e.target.value)}
+                        placeholder="Q1 Answer: Key architectural steps & formula solution..."
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Marking Guide &amp; Rubric (min 12 chars)</label>
+                      <textarea
+                        rows={2}
+                        value={fExamGuide}
+                        onChange={(e) => setFExamGuide(e.target.value)}
+                        placeholder="Final assessment rubric, pass threshold (70%), and grading weights..."
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0D152B] px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-3 space-y-2">
+                    <label className="block text-xs font-medium">
+                      Attach Private Course Files (PDF, DOCX, PPTX, ZIP, MP3, MP4 — encrypted until Pi payment / enrolment)
+                    </label>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <input
+                        type="file"
+                        accept=".pdf,.zip,.docx,.xlsx,.pptx,.mp3,.mp4,.txt,.md,.csv"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleUploadCourseFile(file);
+                        }}
+                        className="text-xs"
+                      />
+                      {uploadingCourseFile && <span className="text-xs text-slate-500">Scanning file...</span>}
+                    </div>
+                    {fCourseFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {fCourseFiles.map((cf, idx) => (
+                          <span key={cf.storageKey} className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-slate-200 dark:border-slate-700 text-[11px] font-mono">
+                            {cf.originalName} ({cf.fileFormat})
+                            <button
+                              type="button"
+                              onClick={() => setFCourseFiles((prev) => prev.filter((_, i) => i !== idx))}
+                              className="text-rose-500 cursor-pointer"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
@@ -2047,7 +2410,7 @@ export function DivisionsView({
                 </div>
               )}
 
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex flex-wrap justify-end gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
@@ -2055,11 +2418,21 @@ export function DivisionsView({
                 >
                   Cancel
                 </button>
+                {activeTab === 'market' && subMode === 'primary' && (
+                  <button
+                    type="submit"
+                    onClick={() => setFSubmitLifecycle('draft')}
+                    className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                  >
+                    Save as Draft
+                  </button>
+                )}
                 <button
                   type="submit"
+                  onClick={() => setFSubmitLifecycle('submitted')}
                   className="px-5 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
                 >
-                  Submit
+                  {activeTab === 'market' && subMode === 'primary' ? 'Submit for Verification' : 'Submit'}
                 </button>
               </div>
             </form>
@@ -2131,11 +2504,23 @@ export function DivisionsView({
                 </span>
               </div>
               <div>
-                <span className="text-slate-500">Refund & Support Terms:</span>{' '}
+                <span className="text-slate-500">Refund &amp; Support Terms:</span>{' '}
                 <span className="text-slate-800 dark:text-slate-200">
-                  {detailProduct.refund_support_terms || 'Covered by IFIOK-EN Pi Dispute Policy'}
+                  {detailProduct.support_info || detailProduct.refund_support_terms || 'Covered by IFIOK-EN Pi Dispute Policy'}
                 </span>
               </div>
+              {detailProduct.product_type !== 'physical' && (
+                <div>
+                  <span className="text-slate-500">Digital Package:</span>{' '}
+                  <span className="font-mono text-slate-800 dark:text-slate-200">
+                    v{detailProduct.version || '1.0.0'}
+                    {detailProduct.file_format ? ` · ${detailProduct.file_format}` : ''}
+                    {detailProduct.file_size_bytes ? ` (${(detailProduct.file_size_bytes / 1024).toFixed(1)} KB)` : ''}
+                    {detailProduct.malware_scan_status ? ` · Scan: ${detailProduct.malware_scan_status}` : ''}
+                    {detailProduct.lifecycle_status ? ` · Lifecycle: ${detailProduct.lifecycle_status}` : ''}
+                  </span>
+                </div>
+              )}
               {detailProduct.last_verified_at && (
                 <div>
                   <span className="text-slate-500">Last Verified:</span>{' '}
@@ -2380,9 +2765,58 @@ export function DivisionsView({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="rounded-lg bg-slate-50 dark:bg-[#081024] border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words">
+            <div className="rounded-lg bg-slate-50 dark:bg-[#081024] border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
               {unlockedPreview.content}
             </div>
+            {unlockedPreview.itemType === 'product' && unlockedPreview.hasFile && (
+              <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/30 p-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs">
+                  <div className="font-semibold text-slate-900 dark:text-white">
+                    {unlockedPreview.fileOriginalName || 'Digital Product Package'}
+                  </div>
+                  <div className="font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                    v{unlockedPreview.version || '1.0.0'}
+                    {unlockedPreview.fileFormat ? ` · ${unlockedPreview.fileFormat}` : ''}
+                    {unlockedPreview.fileSizeBytes ? ` (${(unlockedPreview.fileSizeBytes / 1024).toFixed(1)} KB)` : ''}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={downloadingAsset}
+                  onClick={() => handleDownloadEntitlementFile('product', unlockedPreview.itemId)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>{downloadingAsset ? 'Preparing Token...' : 'Download Verified File'}</span>
+                </button>
+              </div>
+            )}
+            {unlockedPreview.itemType === 'course' && unlockedPreview.courseFiles && unlockedPreview.courseFiles.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Unlocked Course Vault Materials
+                </div>
+                {unlockedPreview.courseFiles.map((cf) => (
+                  <div
+                    key={cf.storageKey}
+                    className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-2.5 flex items-center justify-between gap-2 text-xs"
+                  >
+                    <span className="font-mono truncate">
+                      {cf.originalName} {cf.fileFormat ? `(${cf.fileFormat})` : ''}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={downloadingAsset}
+                      onClick={() => handleDownloadEntitlementFile('course', unlockedPreview.itemId, cf.storageKey)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold cursor-pointer shrink-0 disabled:opacity-50"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Download</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-2 text-[11px] font-mono text-slate-500">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
               <span>Unlocked via verified Pi payment at {unlockedPreview.unlockedAt}</span>

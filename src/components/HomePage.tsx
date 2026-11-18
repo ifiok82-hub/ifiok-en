@@ -460,7 +460,7 @@ export function HomePage({
                   Learn Without Borders. Grow Without Limits.
                 </h3>
                 <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                  Serving individual students worldwide, primary & secondary schools, colleges, training institutions, independent educators, and adult lifelong learners across 17 subjects and {getLanguageAvailabilitySummary().fullUiLanguagesCount} verified languages with IFIOK Professor AI.
+                  Serving individual students worldwide, primary & secondary schools, colleges, training institutions, independent educators, and adult lifelong learners across 20 subjects and {getLanguageAvailabilitySummary().fullUiLanguagesCount} verified languages with 22-point curricula and IFIOK Professor AI.
                 </p>
               </div>
               <div className="space-y-3">
@@ -605,13 +605,13 @@ export function HomePage({
               <div className="space-y-2.5">
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                   <ShoppingBag className="w-4 h-4 text-purple-700 dark:text-amber-400" />
-                  <span>05. IFIOK Market</span>
+                  <span>05. IFIOK Market · IFIOK DIGITAL</span>
                 </div>
                 <h3 className="text-lg font-display font-bold text-slate-950 dark:text-white">
-                  Software, digital publishing, design, Web3 & Pi commerce
+                  IFIOK DIGITAL: Software, digital publishing, design, Web3 & Pi commerce
                 </h3>
                 <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                  Digital Suites A–F and verified physical goods from vetted sellers with distribution rights, refund terms, and Pi-locked fulfillment.
+                  Digital Suites A–F prioritized inside IFIOK DIGITAL with encrypted digital vaults, malware scanning, license attribution, refund terms, and Pi-locked fulfillment.
                 </p>
               </div>
               <button
@@ -619,7 +619,7 @@ export function HomePage({
                 onClick={() => onOpenDivision('market')}
                 className="inline-flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-amber-400 hover:underline cursor-pointer"
               >
-                Visit Marketplace <ArrowRight className="w-4 h-4" />
+                Open IFIOK DIGITAL & Market <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </article>

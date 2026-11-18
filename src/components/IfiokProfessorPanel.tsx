@@ -31,7 +31,11 @@ type ProfessorMode =
   | 'tutor'
   | 'lesson'
   | 'homework'
+  | 'code_stem'
   | 'practice_quiz'
+  | 'mark_answer'
+  | 'explain_doc'
+  | 'recommendations'
   | 'translate'
   | 'exam_prep'
   | 'teacher_prep';
@@ -128,6 +132,52 @@ export function IfiokProfessorPanel({
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [generatingQuiz, setGeneratingQuiz] = useState(false);
 
+  // Answer Marking state
+  const [markQuestion, setMarkQuestion] = useState('');
+  const [markStudentAnswer, setMarkStudentAnswer] = useState('');
+  const [markGuide, setMarkGuide] = useState('');
+  const [markMaxScore, setMarkMaxScore] = useState(10);
+  const [markingLoading, setMarkingLoading] = useState(false);
+  const [markResult, setMarkResult] = useState<{
+    score: number;
+    maxScore: number;
+    strengths: string[];
+    missingConcepts: string[];
+    improvedModelAnswer: string;
+    feedback: string;
+  } | null>(null);
+
+  // Document / Notes Explainer state
+  const [docFileName, setDocFileName] = useState('');
+  const [docMimeType, setDocMimeType] = useState('');
+  const [docBase64, setDocBase64] = useState('');
+  const [docRawText, setDocRawText] = useState('');
+  const [docMode, setDocMode] = useState<'explain' | 'summarize' | 'quiz_from_notes'>('explain');
+  const [docLoading, setDocLoading] = useState(false);
+  const [docResult, setDocResult] = useState<{
+    summary: string;
+    explanation: string;
+    keyTerms: string[];
+    extractedLength: number;
+    truncated: boolean;
+  } | null>(null);
+
+  // Personalized Study Plan Recommendations state
+  const [recLoading, setRecLoading] = useState(false);
+  const [recData, setRecData] = useState<{
+    enrolledCount: number;
+    gradedSubmissionsCount: number;
+    aiSessionsCount: number;
+    avgGradedScore: number | null;
+    focusSubjects: string[];
+    recommendations: Array<{
+      title: string;
+      subject: string;
+      reason: string;
+      actionStep: string;
+    }>;
+  } | null>(null);
+
   // Voice learning state (Web Speech API)
   const [listening, setListening] = useState(false);
   const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
@@ -200,7 +250,7 @@ export function IfiokProfessorPanel({
         setChatLang(res.session.language_code as LanguageCode);
       }
       if (
-        ['tutor', 'lesson', 'homework', 'exam_prep', 'teacher_prep'].includes(res.session.mode)
+        ['tutor', 'lesson', 'homework', 'code_stem', 'exam_prep', 'teacher_prep'].includes(res.session.mode)
       ) {
         setMode(res.session.mode as ProfessorMode);
       }
@@ -232,6 +282,14 @@ export function IfiokProfessorPanel({
     setPrompt('');
 
     try {
+      const chatMode =
+        mode === 'practice_quiz' ||
+        mode === 'translate' ||
+        mode === 'mark_answer' ||
+        mode === 'explain_doc' ||
+        mode === 'recommendations'
+          ? 'tutor'
+          : mode;
       const res = await apiRequest<{
         sessionId: number;
         reply: string;
@@ -243,7 +301,7 @@ export function IfiokProfessorPanel({
           prompt: clean,
           subject,
           languageCode: chatLang,
-          mode: mode === 'practice_quiz' || mode === 'translate' ? 'tutor' : mode,
+          mode: chatMode,
           sessionId: activeSessionId || undefined,
           courseId: initialCourseId || undefined,
         }),
@@ -315,6 +373,131 @@ export function IfiokProfessorPanel({
       setErrorMsg(err instanceof Error ? err.message : 'Practice quiz generation failed.');
     } finally {
       setGeneratingQuiz(false);
+    }
+  };
+
+  const handleMarkAnswer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      onRequireAuth();
+      return;
+    }
+    setErrorMsg('');
+    setMarkingLoading(true);
+    setMarkResult(null);
+    try {
+      const res = await apiRequest<{
+        score: number;
+        maxScore: number;
+        strengths: string[];
+        missingConcepts: string[];
+        improvedModelAnswer: string;
+        feedback: string;
+      }>('/api/academy/ai/mark-answer', {
+        method: 'POST',
+        body: JSON.stringify({
+          question: markQuestion.trim(),
+          studentAnswer: markStudentAnswer.trim(),
+          markingGuide: markGuide.trim() || undefined,
+          maxScore: markMaxScore,
+          subject,
+          languageCode: chatLang,
+        }),
+      });
+      setMarkResult(res);
+      loadAiStatus();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Answer marking failed.');
+    } finally {
+      setMarkingLoading(false);
+    }
+  };
+
+  const handleSelectStudyDoc = async (file: File) => {
+    setErrorMsg('');
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read selected file.'));
+        reader.readAsDataURL(file);
+      });
+      setDocFileName(file.name);
+      setDocMimeType(file.type || 'application/octet-stream');
+      setDocBase64(base64);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to read study file.');
+    }
+  };
+
+  const handleExplainDoc = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      onRequireAuth();
+      return;
+    }
+    if (!docBase64 && docRawText.trim().length < 20) {
+      setErrorMsg('Upload a PDF/DOCX/TXT study document or paste at least 20 characters of notes.');
+      return;
+    }
+    setErrorMsg('');
+    setDocLoading(true);
+    setDocResult(null);
+    try {
+      const res = await apiRequest<{
+        summary: string;
+        explanation: string;
+        keyTerms: string[];
+        extractedLength: number;
+        truncated: boolean;
+      }>('/api/academy/ai/explain-document', {
+        method: 'POST',
+        body: JSON.stringify({
+          fileName: docFileName || undefined,
+          mimeType: docMimeType || undefined,
+          dataBase64: docBase64 || undefined,
+          text: docRawText.trim() || undefined,
+          subject,
+          languageCode: chatLang,
+          mode: docMode,
+        }),
+      });
+      setDocResult(res);
+      loadAiStatus();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Document analysis failed.');
+    } finally {
+      setDocLoading(false);
+    }
+  };
+
+  const handleLoadRecommendations = async () => {
+    if (!user) {
+      onRequireAuth();
+      return;
+    }
+    setErrorMsg('');
+    setRecLoading(true);
+    try {
+      const res = await apiRequest<{
+        enrolledCount: number;
+        gradedSubmissionsCount: number;
+        aiSessionsCount: number;
+        avgGradedScore: number | null;
+        focusSubjects: string[];
+        recommendations: Array<{
+          title: string;
+          subject: string;
+          reason: string;
+          actionStep: string;
+        }>;
+      }>(`/api/academy/ai/recommendations?languageCode=${encodeURIComponent(chatLang)}`);
+      setRecData(res);
+      loadAiStatus();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to generate study plan.');
+    } finally {
+      setRecLoading(false);
     }
   };
 
@@ -405,7 +588,11 @@ export function IfiokProfessorPanel({
     { id: 'tutor', label: 'Interactive Tutor' },
     { id: 'lesson', label: 'Step-by-Step Lesson' },
     { id: 'homework', label: 'Homework Help' },
+    { id: 'code_stem', label: 'STEM & Code Tutor' },
     { id: 'practice_quiz', label: 'Practice Quiz' },
+    { id: 'mark_answer', label: 'Answer Marking' },
+    { id: 'explain_doc', label: 'Notes / PDF Explainer' },
+    { id: 'recommendations', label: 'My Study Plan' },
     { id: 'translate', label: 'Lesson Translator' },
     { id: 'exam_prep', label: 'Exam Prep & Study Plan' },
     ...(canUseTeacherPrep ? [{ id: 'teacher_prep' as const, label: 'Teacher Prep' }] : []),
@@ -725,6 +912,268 @@ export function IfiokProfessorPanel({
               </div>
             </div>
           </form>
+        </div>
+      ) : mode === 'mark_answer' ? (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-5">
+          <div>
+            <h3 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+              AI Answer Marking & Rubric Feedback — {subject}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Submit an exam or homework question together with your written response to receive structured scoring, strengths, missing concepts, and a model answer.
+            </p>
+          </div>
+          <form onSubmit={handleMarkAnswer} className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="sm:col-span-3">
+                <label className="block text-xs font-medium mb-1">Question</label>
+                <input
+                  type="text"
+                  required
+                  minLength={5}
+                  value={markQuestion}
+                  onChange={(e) => setMarkQuestion(e.target.value)}
+                  placeholder="Enter the exact question being answered..."
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3.5 py-2 text-sm text-slate-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Max Score</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={markMaxScore}
+                  onChange={(e) => setMarkMaxScore(Number(e.target.value) || 10)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-sm font-mono tabular-nums"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Student Answer</label>
+              <textarea
+                rows={4}
+                required
+                minLength={5}
+                value={markStudentAnswer}
+                onChange={(e) => setMarkStudentAnswer(e.target.value)}
+                placeholder="Write or paste your full answer here..."
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3.5 py-2 text-sm text-slate-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Marking Guide / Rubric (Optional)</label>
+              <input
+                type="text"
+                value={markGuide}
+                onChange={(e) => setMarkGuide(e.target.value)}
+                placeholder="Key formula, terminology, or rubric points expected..."
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3.5 py-2 text-xs text-slate-900 dark:text-white"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={markingLoading}
+              className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-60 inline-flex items-center gap-2"
+            >
+              {markingLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              <span>{markingLoading ? 'Evaluating Answer...' : 'Mark My Answer'}</span>
+            </button>
+          </form>
+
+          {markResult && (
+            <div className="rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-950/30 p-5 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-display font-bold text-sm text-slate-950 dark:text-white">
+                  Evaluation Feedback
+                </span>
+                <span className="font-mono text-base font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                  {markResult.score} / {markResult.maxScore}
+                </span>
+              </div>
+              <p className="text-slate-700 dark:text-slate-200 leading-relaxed">{markResult.feedback}</p>
+              {markResult.strengths.length > 0 && (
+                <div>
+                  <div className="font-semibold text-emerald-800 dark:text-emerald-300 mb-1">Strengths</div>
+                  <ul className="list-disc list-inside space-y-0.5 text-slate-700 dark:text-slate-200">
+                    {markResult.strengths.map((s, i) => (
+                      <li key={`str-${i}`}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {markResult.missingConcepts.length > 0 && (
+                <div>
+                  <div className="font-semibold text-amber-800 dark:text-amber-300 mb-1">Concepts to Strengthen</div>
+                  <ul className="list-disc list-inside space-y-0.5 text-slate-700 dark:text-slate-200">
+                    {markResult.missingConcepts.map((m, i) => (
+                      <li key={`mis-${i}`}>{m}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {markResult.improvedModelAnswer && (
+                <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#081024] p-3">
+                  <div className="font-semibold mb-1 text-slate-900 dark:text-white">Model Answer</div>
+                  <p className="whitespace-pre-wrap text-slate-700 dark:text-slate-200">{markResult.improvedModelAnswer}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : mode === 'explain_doc' ? (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-5">
+          <div>
+            <h3 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+              Notes, PDF & Document Explainer — {subject}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Upload a study PDF, DOCX, TXT, or Markdown file (or paste your study notes) so IFIOK Professor can explain concepts, summarize chapters, or build practice questions from your document.
+            </p>
+          </div>
+          <form onSubmit={handleExplainDoc} className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">Upload Study Document (PDF, DOCX, TXT, MD)</label>
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleSelectStudyDoc(f);
+                  }}
+                  className="text-xs"
+                />
+                {docFileName && (
+                  <div className="mt-1 font-mono text-[11px] text-emerald-700 dark:text-emerald-400">
+                    Loaded: {docFileName}
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Analysis Mode</label>
+                <select
+                  value={docMode}
+                  onChange={(e) => setDocMode(e.target.value as typeof docMode)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3 py-2 text-xs"
+                >
+                  <option value="explain">Explain Concepts Simply</option>
+                  <option value="summarize">Structured Revision Summary</option>
+                  <option value="quiz_from_notes">Generate Questions from Notes</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Or Paste Study Notes Directly</label>
+              <textarea
+                rows={4}
+                value={docRawText}
+                onChange={(e) => setDocRawText(e.target.value)}
+                placeholder="Paste lecture notes or textbook excerpts..."
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#081024] px-3.5 py-2 text-xs text-slate-900 dark:text-white"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={docLoading}
+              className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-60 inline-flex items-center gap-2"
+            >
+              {docLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              <span>{docLoading ? 'Analyzing Document...' : 'Analyze with IFIOK Professor'}</span>
+            </button>
+          </form>
+
+          {docResult && (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-5 space-y-3 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-display font-bold text-sm text-slate-950 dark:text-white">Summary & Explanation</span>
+                <button
+                  type="button"
+                  onClick={() => handleSpeakText(`${docResult.summary}\n\n${docResult.explanation}`, 998)}
+                  className="inline-flex items-center gap-1 font-semibold text-purple-700 dark:text-amber-400 cursor-pointer"
+                >
+                  {speakingIdx === 998 ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                  <span>{speakingIdx === 998 ? 'Stop' : 'Listen'}</span>
+                </button>
+              </div>
+              <p className="font-semibold text-slate-900 dark:text-white">{docResult.summary}</p>
+              <p className="whitespace-pre-wrap text-slate-700 dark:text-slate-200 leading-relaxed">{docResult.explanation}</p>
+              {docResult.keyTerms.length > 0 && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <span className="font-semibold">Key Terms:</span> {docResult.keyTerms.join(', ')}
+                </div>
+              )}
+              <div className="font-mono text-[11px] text-slate-500 tabular-nums">
+                Extracted {docResult.extractedLength} characters{docResult.truncated ? ' (truncated to context limit)' : ''}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : mode === 'recommendations' ? (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] p-6 space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-display font-bold text-lg text-slate-950 dark:text-white">
+                Personalized Learning Path & Study Plan
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Generated strictly from your actual IFIOK SCHOOL course enrolments, graded school submissions, and IFIOK Professor sessions.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={recLoading}
+              onClick={handleLoadRecommendations}
+              className="px-5 py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-60 inline-flex items-center gap-2"
+            >
+              {recLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              <span>{recLoading ? 'Building Study Plan...' : 'Generate My Study Plan'}</span>
+            </button>
+          </div>
+
+          {recData ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="rounded-lg bg-slate-50 dark:bg-[#081024] p-3 border border-slate-200 dark:border-slate-800">
+                  <div className="font-mono font-bold text-lg tabular-nums">{recData.enrolledCount}</div>
+                  <div className="text-slate-500">Enrolled Courses</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 dark:bg-[#081024] p-3 border border-slate-200 dark:border-slate-800">
+                  <div className="font-mono font-bold text-lg tabular-nums">{recData.gradedSubmissionsCount}</div>
+                  <div className="text-slate-500">Graded Assessments</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 dark:bg-[#081024] p-3 border border-slate-200 dark:border-slate-800">
+                  <div className="font-mono font-bold text-lg tabular-nums">{recData.aiSessionsCount}</div>
+                  <div className="text-slate-500">Tutoring Sessions</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 dark:bg-[#081024] p-3 border border-slate-200 dark:border-slate-800">
+                  <div className="font-mono font-bold text-lg tabular-nums">
+                    {recData.avgGradedScore !== null ? `${recData.avgGradedScore}%` : '—'}
+                  </div>
+                  <div className="text-slate-500">Average Graded Score</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {recData.recommendations.map((rec, idx) => (
+                  <div
+                    key={`${rec.title}-${idx}`}
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#081024] p-4 space-y-2 text-xs"
+                  >
+                    <div className="font-mono text-purple-700 dark:text-amber-400 font-semibold">{rec.subject}</div>
+                    <div className="font-display font-bold text-sm text-slate-950 dark:text-white">{rec.title}</div>
+                    <p className="text-slate-600 dark:text-slate-300">{rec.reason}</p>
+                    <div className="pt-1 border-t border-slate-200 dark:border-slate-800 font-medium text-slate-900 dark:text-slate-100">
+                      Next Action: {rec.actionStep}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Click "Generate My Study Plan" above to analyze your verified learning telemetry.
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

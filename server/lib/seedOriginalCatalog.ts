@@ -6,6 +6,7 @@ import { db, PRIVATE_ASSETS_DIR } from '../db.ts';
 import { evaluateCourseCompleteness } from './courseCompleteness.ts';
 import { encryptSensitive } from './crypto.ts';
 import { buildValidDocx, buildValidPdf, buildValidXlsx, buildValidZip } from './documentBuilder.ts';
+import { SEED_FREELANCE_SERVICES, SEED_OPPORTUNITIES } from '../../src/data/seed.ts';
 
 interface CourseBlueprint {
   slug: string;
@@ -1235,6 +1236,63 @@ export function seedOriginalCatalogIfNeeded(): void {
             malware_scan_status = 'clean_verified', lifecycle_status = 'published', preview_images_json = ?
         WHERE id = ?
       `).run(storageKey, pb.fileName, pb.fileFormat, buf.length, sha256, JSON.stringify(pb.previewHighlights), existingProd.id);
+    }
+  }
+
+  // 4. Seed 6 official IFIOK-EN Freelance Services if missing
+  const getServiceByTitle = db.prepare(`SELECT id FROM freelance_services WHERE freelancer_user_id = ? AND title = ?`);
+  const insertService = db.prepare(`
+    INSERT INTO freelance_services (
+      freelancer_user_id, title, category, description, deliverables, credentials_summary,
+      delivery_days, price_pi, approval_status, source_origin, availability_status, last_verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, 'available', ?)
+  `);
+  for (const svc of SEED_FREELANCE_SERVICES) {
+    const existingSvc = getServiceByTitle.get(facultyUser.id, svc.title) as { id: number } | undefined;
+    if (!existingSvc) {
+      insertService.run(
+        facultyUser.id,
+        svc.title,
+        svc.category,
+        svc.description,
+        svc.deliverables || '',
+        svc.credentials_summary || '',
+        svc.delivery_days,
+        svc.price_pi,
+        svc.source_origin || 'IFIOK-EN Official Service Desk',
+        nowIso
+      );
+    }
+  }
+
+  // 5. Seed 4 official IFIOK-EN Opportunities if missing
+  const getOppByTitle = db.prepare(`SELECT id FROM opportunities WHERE poster_user_id = ? AND title = ?`);
+  const insertOpp = db.prepare(`
+    INSERT INTO opportunities (
+      poster_user_id, title, opportunity_type, organization_name, location, is_remote,
+      compensation_or_award, deadline, description, requirements, eligibility, external_url,
+      approval_status, source_origin, availability_status, last_verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, 'available', ?)
+  `);
+  for (const opp of SEED_OPPORTUNITIES) {
+    const existingOpp = getOppByTitle.get(facultyUser.id, opp.title) as { id: number } | undefined;
+    if (!existingOpp) {
+      insertOpp.run(
+        facultyUser.id,
+        opp.title,
+        opp.opportunity_type,
+        opp.organization_name,
+        opp.location,
+        opp.is_remote,
+        opp.compensation_or_award,
+        opp.deadline,
+        opp.description,
+        opp.requirements,
+        opp.eligibility || '',
+        opp.external_url,
+        opp.source_origin || 'IFIOK-EN Official Program',
+        nowIso
+      );
     }
   }
 }

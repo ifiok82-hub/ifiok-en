@@ -7,6 +7,7 @@ import { LegalModal, LegalPage, type PolicyKey } from './components/LegalModal.t
 import { MemberDashboard } from './components/MemberDashboard.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { apiRequest } from './lib/api.ts';
+import { buildSeedPublicSummary, mergeSummaryWithSeed } from './data/seed.ts';
 import { detectInitialLanguage, isRtlLanguage, LANGUAGE_OPTIONS } from './lib/i18n.ts';
 import {
   initAppStudioBridge,
@@ -105,9 +106,9 @@ function parseRouteFromLocation(): { view: AppView; division: DivisionTab; acade
   if (p === '/school/admin-portal' || p === '/academy/school-portal') return { view: 'divisions', division: 'academy', academySubView: 'schools' };
   if (p === '/school/guardian-portal') return { view: 'divisions', division: 'academy', academySubView: 'guardian_portal' };
   if (p === '/school/verify-certificate' || p === '/academy/verify-certificate') return { view: 'divisions', division: 'academy', academySubView: 'certificates' };
-  if (p === '/ifiok-school' || p === '/academy') return { view: 'divisions', division: 'academy', academySubView: 'courses' };
+  if (p === '/ifiok-school' || p === '/school' || p === '/academy') return { view: 'divisions', division: 'academy', academySubView: 'courses' };
   if (p === '/business-hub') return { view: 'divisions', division: 'business', academySubView: 'courses' };
-  if (p === '/freelance') return { view: 'divisions', division: 'freelance', academySubView: 'courses' };
+  if (p === '/freelance' || p === '/services') return { view: 'divisions', division: 'freelance', academySubView: 'courses' };
   if (p === '/opportunities') return { view: 'divisions', division: 'opportunities', academySubView: 'courses' };
   if (p === '/market') return { view: 'divisions', division: 'market', academySubView: 'courses' };
   if (p === '/community') return { view: 'divisions', division: 'community', academySubView: 'courses' };
@@ -135,7 +136,7 @@ export default function App() {
   const [academySubView, setAcademySubView] = useState<AcademySubView>(initialRoute.academySubView);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [piAuth, setPiAuth] = useState<PiAuthSession | null>(() => getStoredPiAuth());
-  const [summary, setSummary] = useState<PublicSummary | null>(null);
+  const [summary, setSummary] = useState<PublicSummary>(() => buildSeedPublicSummary());
   const [loadingSummary, setLoadingSummary] = useState(true);
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -335,9 +336,9 @@ export default function App() {
     setLoadingSummary(true);
     try {
       const res = await apiRequest<PublicSummary>('/api/divisions/public-summary');
-      setSummary(res);
+      setSummary(mergeSummaryWithSeed(res));
     } catch {
-      // Keep graceful null fallback
+      setSummary((prev) => mergeSummaryWithSeed(prev));
     } finally {
       setLoadingSummary(false);
     }

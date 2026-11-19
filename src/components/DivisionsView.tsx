@@ -19,7 +19,30 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import academyImg from '../assets/images/academy_blockchain_course_1794641802089.jpg';
+import businessImg from '../assets/images/business_hub_advisory_1794641802926.jpg';
+import classroomImg from '../assets/images/global_virtual_classroom_1794728461194.jpg';
+import marketImg from '../assets/images/market_digital_commerce_1794641803851.jpg';
+import {
+  filterAndMergeCourses,
+  filterAndMergeOpportunities,
+  filterAndMergeProducts,
+  filterAndMergeServices,
+  SEED_COURSES,
+  SEED_FREELANCE_SERVICES,
+  SEED_MARKET_LISTINGS,
+  SEED_OPPORTUNITIES,
+} from '../data/seed.ts';
 import { apiRequest } from '../lib/api.ts';
+
+function getProductCoverImage(p: Product): string {
+  if (p.image_url) return p.image_url;
+  const hay = `${p.title} ${p.category} ${p.market_suite || ''}`.toLowerCase();
+  if (hay.includes('web3') || hay.includes('website') || hay.includes('computer')) return academyImg;
+  if (hay.includes('math') || hay.includes('teacher') || hay.includes('study')) return classroomImg;
+  if (hay.includes('business') || hay.includes('accounting') || hay.includes('cv') || hay.includes('entrepreneur')) return businessImg;
+  return marketImg;
+}
 import {
   ACADEMIC_SUBJECTS,
   BUSINESS_HUB_CATEGORIES,
@@ -98,12 +121,12 @@ export function DivisionsView({
   const [filterValue, setFilterValue] = useState('All');
   const [courseLangFilter, setCourseLangFilter] = useState('all');
 
-  // Data collections
-  const [courses, setCourses] = useState<Course[]>([]);
+  // Data collections (seeded baseline merged with live database items)
+  const [courses, setCourses] = useState<Course[]>(() => SEED_COURSES);
   const [businesses, setBusinesses] = useState<BusinessProfile[]>([]);
-  const [services, setServices] = useState<FreelanceService[]>([]);
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [services, setServices] = useState<FreelanceService[]>(() => SEED_FREELANCE_SERVICES);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>(() => SEED_OPPORTUNITIES);
+  const [products, setProducts] = useState<Product[]>(() => SEED_MARKET_LISTINGS);
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [members, setMembers] = useState<PublicMember[]>([]);
 
@@ -216,39 +239,90 @@ export function DivisionsView({
     setLoading(true);
     try {
       if (activeTab === 'academy') {
-        const res = await apiRequest<{ courses: Course[] }>(
+        const res = await apiRequest<{ courses?: Course[] }>(
           `/api/divisions/courses?subject=${encodeURIComponent(filterValue)}&language=${encodeURIComponent(courseLangFilter)}&q=${encodeURIComponent(searchQuery)}`
         );
-        setCourses(res.courses);
+        setCourses(
+          filterAndMergeCourses(res.courses ?? [], {
+            subject: filterValue,
+            language: courseLangFilter,
+            q: searchQuery,
+          })
+        );
       } else if (activeTab === 'business') {
-        const res = await apiRequest<{ businesses: BusinessProfile[] }>(
+        const res = await apiRequest<{ businesses?: BusinessProfile[] }>(
           `/api/divisions/businesses?sector=${encodeURIComponent(filterValue)}&hubCategory=${encodeURIComponent(hubCategoryFilter)}&q=${encodeURIComponent(searchQuery)}`
         );
-        setBusinesses(res.businesses);
+        setBusinesses(res.businesses ?? []);
       } else if (activeTab === 'freelance') {
-        const res = await apiRequest<{ services: FreelanceService[] }>(
+        const res = await apiRequest<{ services?: FreelanceService[] }>(
           `/api/divisions/services?category=${encodeURIComponent(filterValue)}&q=${encodeURIComponent(searchQuery)}`
         );
-        setServices(res.services);
+        setServices(
+          filterAndMergeServices(res.services ?? [], {
+            category: filterValue,
+            q: searchQuery,
+          })
+        );
       } else if (activeTab === 'opportunities') {
-        const res = await apiRequest<{ opportunities: Opportunity[] }>(
+        const res = await apiRequest<{ opportunities?: Opportunity[] }>(
           `/api/divisions/opportunities?type=${encodeURIComponent(filterValue === 'All' ? 'all' : filterValue)}&q=${encodeURIComponent(searchQuery)}`
         );
-        setOpportunities(res.opportunities);
+        setOpportunities(
+          filterAndMergeOpportunities(res.opportunities ?? [], {
+            type: filterValue === 'All' ? 'all' : filterValue,
+            q: searchQuery,
+          })
+        );
       } else if (activeTab === 'market') {
-        const res = await apiRequest<{ products: Product[] }>(
+        const res = await apiRequest<{ products?: Product[] }>(
           `/api/divisions/products?type=${encodeURIComponent(filterValue === 'All' ? 'all' : filterValue)}&suite=${encodeURIComponent(marketSuiteFilter)}&category=${encodeURIComponent(marketCategoryFilter)}&q=${encodeURIComponent(searchQuery)}`
         );
-        setProducts(res.products);
+        setProducts(
+          filterAndMergeProducts(res.products ?? [], {
+            type: filterValue === 'All' ? 'all' : filterValue,
+            suite: marketSuiteFilter,
+            category: marketCategoryFilter,
+            q: searchQuery,
+          })
+        );
       } else if (activeTab === 'community') {
-        const res = await apiRequest<{ posts: CommunityPost[]; members: PublicMember[] }>(
+        const res = await apiRequest<{ posts?: CommunityPost[]; members?: PublicMember[] }>(
           `/api/divisions/community?group=${encodeURIComponent(filterValue)}`
         );
-        setPosts(res.posts);
-        setMembers(res.members);
+        setPosts(res.posts ?? []);
+        setMembers(res.members ?? []);
       }
     } catch (err) {
-      setBannerMsg({ type: 'err', text: err instanceof Error ? err.message : 'Unable to load listings.' });
+      if (activeTab === 'academy') {
+        setCourses(
+          filterAndMergeCourses([], {
+            subject: filterValue,
+            language: courseLangFilter,
+            q: searchQuery,
+          })
+        );
+      } else if (activeTab === 'freelance') {
+        setServices(filterAndMergeServices([], { category: filterValue, q: searchQuery }));
+      } else if (activeTab === 'opportunities') {
+        setOpportunities(
+          filterAndMergeOpportunities([], {
+            type: filterValue === 'All' ? 'all' : filterValue,
+            q: searchQuery,
+          })
+        );
+      } else if (activeTab === 'market') {
+        setProducts(
+          filterAndMergeProducts([], {
+            type: filterValue === 'All' ? 'all' : filterValue,
+            suite: marketSuiteFilter,
+            category: marketCategoryFilter,
+            q: searchQuery,
+          })
+        );
+      } else {
+        setBannerMsg({ type: 'err', text: err instanceof Error ? err.message : 'Unable to load listings.' });
+      }
     } finally {
       setLoading(false);
     }
@@ -1479,16 +1553,14 @@ export function DivisionsView({
                           className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-hidden flex flex-col justify-between"
                         >
                           <div>
-                            {p.image_url && (
-                              <div className="h-44 bg-slate-900">
-                                <img
-                                  src={p.image_url}
-                                  alt={p.title}
-                                  referrerPolicy="no-referrer"
-                                  className="w-full h-full object-cover"
-                                />
-                              </div>
-                            )}
+                            <div className="h-44 bg-slate-900 overflow-hidden">
+                              <img
+                                src={getProductCoverImage(p)}
+                                alt={p.title}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
                             <div className="p-6 space-y-2">
                               <div className="text-xs text-slate-500 dark:text-slate-400">
                                 {isDigital ? 'IFIOK DIGITAL · ' : ''}

@@ -15,8 +15,26 @@ import {
   Users,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import academyCourseImg from '../assets/images/academy_blockchain_course_1794641802089.jpg';
+import businessCourseImg from '../assets/images/business_hub_advisory_1794641802926.jpg';
+import classroomImg from '../assets/images/global_virtual_classroom_1794728461194.jpg';
+import globalHeroImg from '../assets/images/hero_global_network_1794641803186.jpg';
 import certFolioImg from '../assets/images/ifiok_academy_folio_1794728475006.jpg';
+import professorImg from '../assets/images/ifiok_professor_studio_1794728460558.jpg';
+import commerceCourseImg from '../assets/images/market_digital_commerce_1794641803851.jpg';
 import { apiRequest } from '../lib/api.ts';
+
+function getCourseCoverImage(course: Course): string {
+  if (course.image_url) return course.image_url;
+  const hay = `${course.slug} ${course.subject || ''} ${course.category}`.toLowerCase();
+  if (hay.includes('web3') || hay.includes('blockchain')) return academyCourseImg;
+  if (hay.includes('ai') || hay.includes('artificial') || hay.includes('programming')) return professorImg;
+  if (hay.includes('entrepreneur') || hay.includes('financial') || hay.includes('business')) return businessCourseImg;
+  if (hay.includes('marketing') || hay.includes('commerce')) return commerceCourseImg;
+  if (hay.includes('teacher') || hay.includes('pedagogy') || hay.includes('communication')) return certFolioImg;
+  if (hay.includes('math') || hay.includes('science') || hay.includes('english')) return classroomImg;
+  return globalHeroImg;
+}
 import {
   ACADEMIC_SUBJECTS,
   formatPiPrice,
@@ -122,9 +140,29 @@ export function GlobalAcademyHub({
     setLoadingClassroom(true);
     try {
       const res = await apiRequest<ClassroomData>(`/api/divisions/courses/${courseId}/classroom`);
-      setClassroom(res);
+      if (res && res.course) {
+        setClassroom(res);
+      } else {
+        throw new Error('Classroom preview unavailable');
+      }
     } catch (err) {
-      onNotify('err', err instanceof Error ? err.message : 'Unable to open virtual classroom.');
+      const fallbackCourse = courses.find((c) => c.id === courseId);
+      if (fallbackCourse) {
+        setClassroom({
+          course: fallbackCourse,
+          completeness: {
+            score: fallbackCourse.completeness_score ?? 22,
+            total: fallbackCourse.completeness_total ?? 22,
+            complete: true,
+            missing: [],
+          },
+          enrolment: null,
+          unlocked: fallbackCourse.price_pi === 0,
+          materials: fallbackCourse.price_pi === 0 ? fallbackCourse.description : null,
+        });
+      } else {
+        onNotify('err', err instanceof Error ? err.message : 'Unable to open virtual classroom.');
+      }
     } finally {
       setLoadingClassroom(false);
     }
@@ -403,16 +441,14 @@ export function GlobalAcademyHub({
                     className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D152B] overflow-hidden flex flex-col justify-between"
                   >
                     <div>
-                      {c.image_url && (
-                        <div className="h-40 bg-slate-900">
-                          <img
-                            src={c.image_url}
-                            alt={c.title}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                      )}
+                      <div className="h-40 bg-slate-900 overflow-hidden">
+                        <img
+                          src={getCourseCoverImage(c)}
+                          alt={c.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
                       <div className="p-6 space-y-2.5">
                         <div className="text-xs text-slate-500 dark:text-slate-400">
                           {c.subject || c.category} · {c.level} · {c.duration_hours} hrs · {(c.language_code || 'en').toUpperCase()}

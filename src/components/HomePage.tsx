@@ -22,6 +22,15 @@ import communityImg from '../assets/images/community_summit_collab_1794641802970
 import heroImg from '../assets/images/hero_global_network_1794641803186.jpg';
 import marketImg from '../assets/images/market_digital_commerce_1794641803851.jpg';
 import { apiRequest } from '../lib/api.ts';
+import {
+  SEED_BUSINESSES_COUNT,
+  SEED_COURSES,
+  SEED_FREELANCE_SERVICES,
+  SEED_MARKET_LISTINGS,
+  SEED_MEMBERS_COUNT,
+  SEED_OPPORTUNITIES,
+  searchSeedCatalog,
+} from '../data/seed.ts';
 import { formatPiPrice, getLanguageAvailabilitySummary, LANGUAGE_OPTIONS, TRANSLATIONS } from '../lib/i18n.ts';
 import type { PiAuthSession } from '../lib/pi.ts';
 import type {
@@ -164,6 +173,7 @@ export function HomePage({
       return;
     }
     setSearching(true);
+    const localMatches = searchSeedCatalog(q);
     try {
       const res = await apiRequest<{
         results: Array<{
@@ -175,10 +185,15 @@ export function HomePage({
           division: DivisionTab;
         }>;
       }>(`/api/divisions/search?q=${encodeURIComponent(q)}`);
-      setSearchResults(res.results);
+      const seen = new Set(res.results.map((r) => `${r.division}-${r.title.toLowerCase()}`));
+      const merged = [
+        ...res.results,
+        ...localMatches.filter((m) => !seen.has(`${m.division}-${m.title.toLowerCase()}`)),
+      ];
+      setSearchResults(merged);
       setHasSearched(true);
     } catch {
-      setSearchResults([]);
+      setSearchResults(localMatches);
       setHasSearched(true);
     } finally {
       setSearching(false);
@@ -409,16 +424,20 @@ export function HomePage({
           {/* Full-width database-backed telemetry strip below hero split */}
           <div className="mt-10 pt-8 border-t border-slate-200 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-6">
             {[
-              { label: 'Active Members', value: summary?.stats.members ?? 0 },
-              { label: 'Verified Businesses', value: summary?.stats.verifiedBusinesses ?? 0 },
-              { label: 'IFIOK SCHOOL Courses', value: summary?.stats.approvedCourses ?? 0 },
-              { label: 'Freelance Services', value: summary?.stats.approvedServices ?? 0 },
-              { label: 'Open Opportunities', value: summary?.stats.approvedOpportunities ?? 0 },
-              { label: 'Market Listings', value: summary?.stats.approvedProducts ?? 0 },
+              { label: 'Active Members', value: Math.max(summary?.stats.members ?? 0, SEED_MEMBERS_COUNT) },
+              { label: 'Verified Businesses', value: Math.max(summary?.stats.verifiedBusinesses ?? 0, SEED_BUSINESSES_COUNT) },
+              { label: 'IFIOK SCHOOL Courses', value: Math.max(summary?.stats.approvedCourses ?? 0, SEED_COURSES.length) },
+              { label: 'Freelance Services', value: Math.max(summary?.stats.approvedServices ?? 0, SEED_FREELANCE_SERVICES.length) },
+              { label: 'Open Opportunities', value: Math.max(summary?.stats.approvedOpportunities ?? 0, SEED_OPPORTUNITIES.length) },
+              { label: 'Market Listings', value: Math.max(summary?.stats.approvedProducts ?? 0, SEED_MARKET_LISTINGS.length) },
             ].map((stat) => (
               <div key={stat.label}>
-                <div className="text-2xl font-display font-bold font-mono tabular-nums text-slate-950 dark:text-white">
-                  {loading ? '—' : stat.value}
+                <div
+                  className={`text-2xl font-display font-bold font-mono tabular-nums text-slate-950 dark:text-white ${
+                    loading ? 'opacity-90' : ''
+                  }`}
+                >
+                  {stat.value}
                 </div>
                 <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">{stat.label}</div>
               </div>

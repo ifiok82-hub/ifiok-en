@@ -30,7 +30,7 @@ import {
   SEED_MEMBERS_COUNT,
   SEED_OPPORTUNITIES,
   searchSeedCatalog,
-} from '../data/seed.ts';
+} from '../lib/seed.ts';
 import { formatPiPrice, getLanguageAvailabilitySummary, LANGUAGE_OPTIONS, TRANSLATIONS } from '../lib/i18n.ts';
 import type { PiAuthSession } from '../lib/pi.ts';
 import type {

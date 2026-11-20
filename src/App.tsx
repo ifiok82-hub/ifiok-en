@@ -7,7 +7,7 @@ import { LegalModal, LegalPage, type PolicyKey } from './components/LegalModal.t
 import { MemberDashboard } from './components/MemberDashboard.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { apiRequest } from './lib/api.ts';
-import { buildSeedPublicSummary, mergeSummaryWithSeed } from './data/seed.ts';
+import { buildSeedPublicSummary, mergeSummaryWithSeed } from './lib/seed.ts';
 import { detectInitialLanguage, isRtlLanguage, LANGUAGE_OPTIONS } from './lib/i18n.ts';
 import {
   initAppStudioBridge,

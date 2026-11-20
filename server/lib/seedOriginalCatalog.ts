@@ -6,7 +6,7 @@ import { db, PRIVATE_ASSETS_DIR } from '../db.ts';
 import { evaluateCourseCompleteness } from './courseCompleteness.ts';
 import { encryptSensitive } from './crypto.ts';
 import { buildValidDocx, buildValidPdf, buildValidXlsx, buildValidZip } from './documentBuilder.ts';
-import { SEED_FREELANCE_SERVICES, SEED_OPPORTUNITIES } from '../../src/data/seed.ts';
+import { SEED_FREELANCE_SERVICES, SEED_OPPORTUNITIES } from '../../src/lib/seed.ts';
 
 interface CourseBlueprint {
   slug: string;

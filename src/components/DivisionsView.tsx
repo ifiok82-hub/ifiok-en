@@ -32,7 +32,7 @@ import {
   SEED_FREELANCE_SERVICES,
   SEED_MARKET_LISTINGS,
   SEED_OPPORTUNITIES,
-} from '../data/seed.ts';
+} from '../lib/seed.ts';
 import { apiRequest } from '../lib/api.ts';
 
 function getProductCoverImage(p: Product): string {

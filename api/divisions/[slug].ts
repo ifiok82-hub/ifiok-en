@@ -5,7 +5,7 @@ import {
   filterAndMergeProducts,
   filterAndMergeServices,
   searchSeedCatalog,
-} from '../../src/data/seed.ts';
+} from '../../src/lib/seed.ts';
 
 type Req = IncomingMessage & { query?: Record<string, string | string[] | undefined> };
 

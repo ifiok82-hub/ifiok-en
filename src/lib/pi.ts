@@ -36,7 +36,7 @@ export interface PiAuthSession {
 }
 
 interface PiSDK {
-  init: (config: { version: string; sandbox?: boolean }) => void | Promise<void>;
+  init: (config: { version: string }) => void | Promise<void>;
   authenticate: (
     scopes: string[],
     onIncompletePaymentFound: (payment: PiIncompletePayment) => void
@@ -78,6 +78,7 @@ function notifyPiAuthChanged(session: PiAuthSession | null) {
 }
 
 let appStudioCacheClearedOnce = false;
+const PI_LOGGED_OUT_FLAG = 'ifiok_pi_logged_out';
 
 export function getStoredPiAuth(): PiAuthSession | null {
   if (typeof window === 'undefined') return null;
@@ -171,71 +172,55 @@ export async function waitForPiSdk(timeoutMs = 5000): Promise<boolean> {
   return false;
 }
 
-// Unified handler for any incomplete Pi payment discovered during authenticate()
+// Unified handler for any incomplete Pi payment discovered during authenticate():
+// Complete if transaction.txid exists, else cancel so stuck prior payments never block new payments.
 export async function handleIncompletePaymentFound(incomplete: PiIncompletePayment): Promise<void> {
   const paymentId = incomplete?.identifier;
   if (!paymentId) return;
 
   const orderId = incomplete.metadata?.orderId ? Number(incomplete.metadata.orderId) : null;
-  const completeEndpoint = orderId ? '/api/payments/pi/complete' : '/api/pi/complete';
-  const approveEndpoint = orderId ? '/api/payments/pi/approve' : '/api/pi/approve';
-  const cancelEndpoint = orderId ? '/api/payments/pi/cancel' : '/api/pi/cancel';
 
   try {
     if (incomplete.transaction?.txid) {
-      await fetch(completeEndpoint, {
+      const txid = incomplete.transaction.txid;
+      const res = await fetch(orderId ? '/api/payments/pi/complete' : '/api/pi/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           paymentId,
-          txid: incomplete.transaction.txid,
+          txid,
           ...(orderId ? { orderId } : {}),
         }),
       });
-      return;
-    }
-
-    if (
-      incomplete.status &&
-      !incomplete.status.developer_approved &&
-      !incomplete.status.cancelled &&
-      !incomplete.status.user_cancelled
-    ) {
-      const appRes = await fetch(approveEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          paymentId,
-          ...(orderId ? { orderId } : {}),
-        }),
-      });
-      if (!appRes.ok) {
-        await fetch(cancelEndpoint, {
+      if (!res.ok && orderId) {
+        await fetch('/api/pi/complete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({
-            paymentId,
-            attemptServerCancel: true,
-            ...(orderId ? { orderId } : {}),
-          }),
-        });
+          body: JSON.stringify({ paymentId, txid }),
+        }).catch(() => undefined);
       }
       return;
     }
 
-    await fetch(cancelEndpoint, {
+    const cancelRes = await fetch(orderId ? '/api/payments/pi/cancel' : '/api/pi/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
         paymentId,
-        attemptServerCancel: true,
         ...(orderId ? { orderId } : {}),
       }),
     });
+    if (!cancelRes.ok && orderId) {
+      await fetch('/api/pi/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ paymentId }),
+      }).catch(() => undefined);
+    }
   } catch {
     // Keep authentication resilient even if stale incomplete payment cleanup fails
   }
@@ -246,15 +231,17 @@ const APP_STUDIO_LOGIN_URL = 'https://backend.appstudio-u7cm9zhmha0ruwv8.piappen
 async function sendAccessTokenDirectlyToAppStudio(accessToken: string): Promise<{
   ok: boolean;
   sessionToken?: string;
-  user?: { uid?: string; username?: string };
+  user?: { uid: string; username: string };
 }> {
   try {
+    console.log('AppStudio auth sent');
     const res = await fetch(APP_STUDIO_LOGIN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ accessToken }),
     });
     if (!res.ok) {
+      console.error('AppStudio auth failed', { status: res.status });
       return { ok: false };
     }
     const raw = (await res.json().catch(() => ({}))) as {
@@ -263,23 +250,83 @@ async function sendAccessTokenDirectlyToAppStudio(accessToken: string): Promise<
       uid?: string;
       username?: string;
       user?: { uid?: string; username?: string };
-      data?: { sessionToken?: string; user?: { uid?: string; username?: string } };
+      data?: { sessionToken?: string; uid?: string; username?: string; user?: { uid?: string; username?: string } };
     };
-    const uid = raw.user?.uid || raw.data?.user?.uid || raw.uid;
-    const username = raw.user?.username || raw.data?.user?.username || raw.username;
+    const uid = raw.user?.uid || raw.data?.user?.uid || raw.data?.uid || raw.uid || '';
+    const username = raw.user?.username || raw.data?.user?.username || raw.data?.username || raw.username || '';
+    if (!uid || !username) {
+      console.error('AppStudio auth failed', { reason: 'Missing uid or username in App Studio response' });
+      return { ok: false };
+    }
     return {
       ok: true,
       sessionToken: raw.sessionToken || raw.data?.sessionToken || raw.token || '',
-      user: uid || username ? { uid, username } : undefined,
+      user: { uid, username },
     };
-  } catch {
+  } catch (err) {
+    console.error('AppStudio auth failed', { error: err instanceof Error ? err.message : String(err) });
     return { ok: false };
   }
+}
+
+async function verifyAccessTokenWithAppStudio(accessToken: string): Promise<{
+  uid: string;
+  username: string;
+  sessionToken?: string;
+}> {
+  // Send ONLY { accessToken } directly to App Studio AND via /api/pi/auth
+  const [directResult, serverResponse] = await Promise.all([
+    sendAccessTokenDirectlyToAppStudio(accessToken),
+    fetch('/api/pi/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ accessToken }),
+    }).catch(() => null),
+  ]);
+
+  const verifyData = serverResponse
+    ? ((await serverResponse.json().catch(() => ({}))) as {
+        success?: boolean;
+        ok?: boolean;
+        error?: string;
+        sessionToken?: string;
+        piUser?: { uid?: string; username?: string };
+      })
+    : {};
+
+  const serverVerified = Boolean(
+    serverResponse?.ok && (verifyData.success || verifyData.ok) && verifyData.piUser?.uid && verifyData.piUser?.username
+  );
+
+  // Trust ONLY App Studio uid / username (never browser-supplied fallback)
+  const resolvedUid = verifyData.piUser?.uid || directResult.user?.uid || '';
+  const resolvedUsername = verifyData.piUser?.username || directResult.user?.username || '';
+
+  if ((!serverVerified && !directResult.ok) || !resolvedUid || !resolvedUsername) {
+    throw new Error(
+      verifyData.error || 'App Studio could not verify your Pi Network identity.'
+    );
+  }
+
+  return {
+    uid: resolvedUid,
+    username: resolvedUsername,
+    sessionToken: verifyData.sessionToken || directResult.sessionToken,
+  };
 }
 
 export async function connectWithPi(
   scopes: string[] = ['username', 'payments']
 ): Promise<PiAuthSession> {
+  if (typeof window !== 'undefined') {
+    try {
+      window.sessionStorage.removeItem(PI_LOGGED_OUT_FLAG);
+    } catch {
+      // Ignore storage restriction
+    }
+  }
+
   const ready = await waitForPiSdk(5000);
   if (!ready || !window.Pi) {
     throw new Error(
@@ -297,78 +344,15 @@ export async function connectWithPi(
     paymentScopeAuthorized = true;
   }
 
-  // Keep accessToken in memory + safe storage immediately so heartbeats work even if storage is restricted
   const accessToken = auth?.accessToken;
   if (!accessToken) {
     throw new Error('Pi Network authentication did not return a valid accessToken.');
   }
 
-  const appStudioSession = getAppStudioSession();
-  const browserUser = auth?.user || null;
-  if (typeof window !== 'undefined') {
-    window.__PI_ACCESS_TOKEN = accessToken;
-    window.__PI_USER = browserUser;
-    window.piAccessToken = accessToken;
-    safeSetLocalStorage('pi_access_token', accessToken);
-    if (browserUser) {
-      safeSetLocalStorage('pi_user', JSON.stringify(browserUser));
-    }
-  }
-
-  // Start continuous App Studio heartbeat & send immediate + 1s..10s retries
   startAppStudioHeartbeat();
-  sendTokenToAppStudioNow();
-  broadcastTokenToAppStudio(accessToken, browserUser);
+  const verified = await verifyAccessTokenWithAppStudio(accessToken);
+  const verifiedUser = { uid: verified.uid, username: verified.username };
 
-  // Send accessToken BOTH directly from browser to App Studio (/pi/auth/v1/login) AND via /api/pi/auth
-  const [directResult, serverResponse] = await Promise.all([
-    sendAccessTokenDirectlyToAppStudio(accessToken),
-    fetch('/api/pi/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        accessToken,
-        username: auth?.user?.username,
-        uid: auth?.user?.uid,
-        appStudioSession,
-      }),
-    }).catch(() => null),
-  ]);
-
-  const verifyData = serverResponse
-    ? ((await serverResponse.json().catch(() => ({}))) as {
-        success?: boolean;
-        ok?: boolean;
-        error?: string;
-        sessionToken?: string;
-        appStudioSession?: string;
-        piUser?: { uid?: string; username?: string };
-      })
-    : {};
-
-  const serverVerified = Boolean(
-    serverResponse?.ok && (verifyData.success || verifyData.ok) && verifyData.piUser?.uid && verifyData.piUser?.username
-  );
-
-  if (!serverVerified && !directResult.ok) {
-    throw new Error(
-      verifyData.error || 'Server could not verify Pi Network authentication token with App Studio.'
-    );
-  }
-
-  const resolvedUid = verifyData.piUser?.uid || directResult.user?.uid || browserUser?.uid || '';
-  const resolvedUsername =
-    verifyData.piUser?.username || directResult.user?.username || browserUser?.username || '';
-
-  if (!resolvedUid || !resolvedUsername) {
-    throw new Error('Incomplete Pi Network user identity returned during verification.');
-  }
-
-  const verifiedUser = {
-    uid: resolvedUid,
-    username: resolvedUsername,
-  };
   if (typeof window !== 'undefined') {
     window.__PI_ACCESS_TOKEN = accessToken;
     window.__PI_USER = verifiedUser;
@@ -377,14 +361,14 @@ export async function connectWithPi(
     safeSetLocalStorage('pi_user', JSON.stringify(verifiedUser));
   }
 
-  // Re-broadcast verified user + token across 0-10s windows
+  sendTokenToAppStudioNow();
   broadcastTokenToAppStudio(accessToken, verifiedUser);
 
   const session: PiAuthSession = {
     username: verifiedUser.username,
     uid: verifiedUser.uid,
     accessToken,
-    sessionToken: verifyData.sessionToken || directResult.sessionToken,
+    sessionToken: verified.sessionToken,
     connectedAt: new Date().toISOString(),
   };
 
@@ -392,8 +376,58 @@ export async function connectWithPi(
   return session;
 }
 
+let autoAuthAttempted = false;
+
+export async function autoAuthenticatePi(): Promise<PiAuthSession | null> {
+  if (typeof window === 'undefined' || autoAuthAttempted) return runtimePiAuth;
+  autoAuthAttempted = true;
+
+  try {
+    if (window.sessionStorage.getItem(PI_LOGGED_OUT_FLAG) === '1') {
+      return null;
+    }
+  } catch {
+    // Ignore storage restriction
+  }
+
+  const ready = await waitForPiSdk(4000);
+  if (!ready || !window.Pi) return null;
+
+  try {
+    if (!initialized) {
+      await window.Pi.init({ version: '2.0' });
+      initialized = true;
+    }
+    const auth = await window.Pi.authenticate(['username'], handleIncompletePaymentFound);
+    const accessToken = auth?.accessToken;
+    if (!accessToken) return null;
+
+    const verified = await verifyAccessTokenWithAppStudio(accessToken);
+    const verifiedUser = { uid: verified.uid, username: verified.username };
+    const session: PiAuthSession = {
+      username: verifiedUser.username,
+      uid: verifiedUser.uid,
+      accessToken,
+      sessionToken: verified.sessionToken,
+      connectedAt: new Date().toISOString(),
+    };
+    saveStoredPiAuth(session);
+    broadcastTokenToAppStudio(accessToken, verifiedUser);
+    return session;
+  } catch {
+    return null;
+  }
+}
+
 export async function logoutPi(): Promise<void> {
   appStudioCacheClearedOnce = true;
+  if (typeof window !== 'undefined') {
+    try {
+      window.sessionStorage.setItem(PI_LOGGED_OUT_FLAG, '1');
+    } catch {
+      // Ignore storage restriction
+    }
+  }
   saveStoredPiAuth(null);
   clearCachedPiStorage();
   try {
@@ -408,17 +442,11 @@ export async function revalidateStoredPiAuth(): Promise<PiAuthSession | null> {
   const cached = getStoredPiAuth();
   if (!cached?.accessToken) return null;
   try {
-    const appStudioSession = getAppStudioSession();
     const res = await fetch('/api/pi/auth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({
-        accessToken: cached.accessToken,
-        username: cached.username,
-        uid: cached.uid,
-        appStudioSession,
-      }),
+      body: JSON.stringify({ accessToken: cached.accessToken }),
     });
     if (res.status === 401 || res.status === 403) {
       saveStoredPiAuth(null);
@@ -474,8 +502,10 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
     );
   }
 
-  await window.Pi.init({ version: '2.0', sandbox: true });
-  initialized = true;
+  if (!initialized) {
+    await window.Pi.init({ version: '2.0' });
+    initialized = true;
+  }
 
   // Ensure server-verified Pi authentication with payments scope is active in current runtime
   let session = runtimePiAuth;
@@ -578,8 +608,8 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
             safeReject(new PiPaymentCancelledError(paymentId, 'Cancelled'));
           },
           onError: (error: Error, payment?: unknown) => {
-            void payment;
-            safeReject(new Error(error?.message || 'Pi SDK payment error occurred.'));
+            console.error('[PI PAYMENT ERROR]', error, payment);
+            safeReject(new Error(error?.message || 'Unable to process Pi Testnet payment. Please try again.'));
           },
         }
       );
@@ -690,15 +720,16 @@ export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise
             reject(err instanceof Error ? err : new Error(String(err)));
           }
         },
-        onCancel: async () => {
+        onCancel: async (paymentId: string) => {
           await apiRequest('/api/payments/pi/cancel', {
             method: 'POST',
-            body: JSON.stringify({ orderId: intent.orderId }),
+            body: JSON.stringify({ paymentId, orderId: intent.orderId }),
           }).catch(() => undefined);
           reject(new Error('Pi payment was cancelled.'));
         },
-        onError: (error: Error) => {
-          reject(error || new Error('Pi SDK payment error occurred.'));
+        onError: (error: Error, payment?: unknown) => {
+          console.error('[PI PAYMENT ERROR]', error, payment);
+          reject(new Error(error?.message || 'Unable to complete Pi payment. Please try again.'));
         },
       }
     );

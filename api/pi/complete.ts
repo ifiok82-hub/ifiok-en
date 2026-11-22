@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const PI_API_BASE = 'https://api.minepi.com/v2';
-const TESTNET_AMOUNT_PI = 0.01;
+const PI_TESTNET_API_BASE = 'https://api.testnet.minepi.com/v2';
 
 type Req = IncomingMessage & { body?: Record<string, unknown> };
 type Res = ServerResponse;
@@ -48,7 +47,7 @@ interface PiPaymentRecord {
 }
 
 function getPiApiKey(): string {
-  return process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim() || '';
+  return process.env.PI_API_KEY?.trim() || process.env.PI_NETWORK_API_KEY?.trim() || '';
 }
 
 function validateU2APayment(
@@ -64,8 +63,11 @@ function validateU2APayment(
   if (payment.network && !payment.network.toLowerCase().includes('testnet')) {
     return { valid: false, statusCode: 403, error: `Only Pi Testnet payments are permitted (received ${payment.network}).` };
   }
-  if (typeof payment.amount !== 'number' || Math.abs(payment.amount - TESTNET_AMOUNT_PI) > 0.00001) {
-    return { valid: false, statusCode: 400, error: `Expected ${TESTNET_AMOUNT_PI} Pi, received ${payment.amount ?? 'unknown'}.` };
+  if (typeof payment.amount !== 'number' || payment.amount <= 0) {
+    return { valid: false, statusCode: 400, error: `Invalid Pi payment amount (${payment.amount ?? 'unknown'}).` };
+  }
+  if (payment.metadata?.type === 'testnet_test' && Math.abs(payment.amount - 0.01) > 0.00001) {
+    return { valid: false, statusCode: 400, error: `Expected 0.01 Pi for Testnet test, received ${payment.amount}.` };
   }
   if (payment.metadata?.app && payment.metadata.app !== 'ifiok-en') {
     return { valid: false, statusCode: 403, error: 'Payment metadata does not belong to IFIOK-EN.' };
@@ -86,77 +88,34 @@ export default async function handler(req: Req, res: Res) {
     return sendJson(res, 400, { success: false, ok: false, error: 'paymentId and txid are required.' });
   }
 
+  console.log('Complete called', { paymentId, txid });
+
   const piKey = getPiApiKey();
   if (!piKey || piKey.length <= 10) {
+    console.error('Complete failed', { paymentId, error: 'PI_API_KEY missing' });
     return sendJson(res, 503, {
       success: false,
       ok: false,
-      error: 'PI_NETWORK_API_KEY is not configured on the server.',
+      error: 'PI_API_KEY is not configured on the server.',
     });
   }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    // 1. Inspect payment state before completion
-    const inspectRes = await fetch(`${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}`, {
-      headers: { Authorization: `Key ${piKey}` },
-      signal: controller.signal,
-    });
-    const inspectText = await inspectRes.text();
-    let inspected: PiPaymentRecord = {};
-    try {
-      inspected = inspectText ? (JSON.parse(inspectText) as PiPaymentRecord) : {};
-    } catch {
-      inspected = {};
-    }
-
-    if (!inspectRes.ok) {
-      return sendJson(res, 502, {
-        success: false,
-        ok: false,
-        error: `Pi payment verification lookup failed (${inspectRes.status}): ${inspectText}`,
-      });
-    }
-
-    const preCheck = validateU2APayment(inspected, paymentId);
-    if (!preCheck.valid) {
-      return sendJson(res, preCheck.statusCode, { success: false, ok: false, error: preCheck.error });
-    }
-
-    if (inspected.transaction?.txid && inspected.transaction.txid !== txid) {
-      return sendJson(res, 409, {
-        success: false,
-        ok: false,
-        error: 'Submitted txid does not match the transaction recorded on Pi Platform.',
-      });
-    }
-
-    const alreadyVerified = Boolean(inspected.status?.transaction_verified || inspected.transaction?.verified);
-    if (inspected.status?.developer_completed && alreadyVerified) {
-      return sendJson(res, 200, {
-        success: true,
-        ok: true,
-        completed: true,
-        alreadyCompleted: true,
-        paymentId,
-        txid,
-        amount: TESTNET_AMOUNT_PI,
-        status: 'completed',
-        environment: 'testnet',
-      });
-    }
-
-    // 2. Complete payment with Pi Platform API
-    const completeRes = await fetch(`${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/complete`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Key ${piKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ txid }),
-      signal: controller.signal,
-    });
+    // Call Pi Testnet API /complete directly with txid
+    const completeRes = await fetch(
+      `${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}/complete`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Key ${piKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ txid }),
+        signal: controller.signal,
+      }
+    );
 
     const rawText = await completeRes.text();
     let completedJson: PiPaymentRecord = {};
@@ -167,21 +126,65 @@ export default async function handler(req: Req, res: Res) {
     }
 
     if (!completeRes.ok) {
-      console.error(`[VERCEL PI COMPLETE FAIL] paymentId=${paymentId} status=${completeRes.status} body=${rawText.slice(0, 300)}`);
+      // Check if payment was already completed idempotently
+      const inspectRes = await fetch(
+        `${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}`,
+        {
+          headers: { Authorization: `Key ${piKey}` },
+          signal: controller.signal,
+        }
+      ).catch(() => null);
+      if (inspectRes && inspectRes.ok) {
+        const inspected = (await inspectRes.json().catch(() => ({}))) as PiPaymentRecord;
+        const alreadyVerified = Boolean(
+          inspected.status?.developer_completed &&
+            (inspected.status?.transaction_verified || inspected.transaction?.verified)
+        );
+        if (alreadyVerified && (!inspected.transaction?.txid || inspected.transaction.txid === txid)) {
+          const check = validateU2APayment(inspected, paymentId);
+          if (!check.valid) {
+            return sendJson(res, check.statusCode, { success: false, ok: false, error: check.error });
+          }
+          console.log('Complete success (idempotent)', { paymentId, txid, amount: inspected.amount });
+          return sendJson(res, 200, {
+            success: true,
+            ok: true,
+            completed: true,
+            alreadyCompleted: true,
+            paymentId,
+            txid,
+            amount: inspected.amount ?? 0.01,
+            status: 'completed',
+            environment: 'testnet',
+          });
+        }
+      }
+
+      console.error('Complete failed', { paymentId, status: completeRes.status, body: rawText.slice(0, 300) });
       return sendJson(res, 502, {
         success: false,
         ok: false,
-        error: `Pi Server Completion failed (${completeRes.status}): ${rawText}`,
+        error: `Pi Testnet Server Completion failed (${completeRes.status}): ${rawText}`,
       });
     }
 
     const postCheck = validateU2APayment(completedJson, paymentId);
     if (!postCheck.valid) {
+      console.error('Complete failed', { paymentId, error: postCheck.error });
       return sendJson(res, postCheck.statusCode, { success: false, ok: false, error: postCheck.error });
+    }
+
+    if (completedJson.transaction?.txid && completedJson.transaction.txid !== txid) {
+      return sendJson(res, 409, {
+        success: false,
+        ok: false,
+        error: 'Submitted txid does not match Pi Testnet transaction.',
+      });
     }
 
     const verified = Boolean(completedJson.status?.transaction_verified || completedJson.transaction?.verified);
     if (!completedJson.status?.developer_completed || !verified) {
+      console.error('Complete failed', { paymentId, error: 'Transaction not verified on Testnet' });
       return sendJson(res, 400, {
         success: false,
         ok: false,
@@ -189,22 +192,23 @@ export default async function handler(req: Req, res: Res) {
       });
     }
 
-    console.log(`[VERCEL PI COMPLETE OK] paymentId=${paymentId} txid=${txid}`);
+    console.log('Complete success', { paymentId, txid, amount: completedJson.amount ?? 0.01 });
     return sendJson(res, 200, {
       success: true,
       ok: true,
       completed: true,
       paymentId,
       txid,
-      amount: TESTNET_AMOUNT_PI,
+      amount: completedJson.amount ?? 0.01,
       status: 'completed',
       environment: 'testnet',
     });
   } catch (err) {
+    console.error('Complete failed', { paymentId, error: err instanceof Error ? err.message : String(err) });
     return sendJson(res, 502, {
       success: false,
       ok: false,
-      error: `Pi completion request error: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Pi Testnet completion request error: ${err instanceof Error ? err.message : String(err)}`,
     });
   } finally {
     clearTimeout(timer);

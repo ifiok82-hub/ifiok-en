@@ -42,13 +42,36 @@ app.use(
       ? {
           directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", 'https://sdk.minepi.com'],
+            scriptSrc: ["'self'", 'https://sdk.minepi.com', 'https://*.minepi.com'],
             styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
             fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
-            imgSrc: ["'self'", 'data:', 'https:'],
-            connectSrc: ["'self'", 'https://socialchain.app', 'https://*.minepi.com', 'https://*.pinet.com', 'https://*.piappengine.com'],
-            frameSrc: ["'self'", 'https://socialchain.app', 'https://*.minepi.com', 'https://*.pinet.com', 'https://*.piappengine.com'],
-            frameAncestors: null,
+            imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+            connectSrc: [
+              "'self'",
+              'https://socialchain.app',
+              'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com',
+              'https://api.testnet.minepi.com',
+              'https:',
+              'wss:',
+            ],
+            frameSrc: [
+              "'self'",
+              'https://socialchain.app',
+              'https://*.minepi.com',
+              'https://*.pinet.com',
+              'https://*.pi.app',
+              'https://*.pi-browser.app',
+              'https://*.piappengine.com',
+            ],
+            frameAncestors: [
+              "'self'",
+              'https://*.minepi.com',
+              'https://*.pinet.com',
+              'https://*.pi.app',
+              'https://*.pi-browser.app',
+              'https://app-studio.minepi.com',
+              'https://*.vercel.app',
+            ],
           },
         }
       : false,
@@ -89,6 +112,16 @@ app.use('/api/academy/teacher-submissions', apiLimiter, teacherSubmissionsRoutes
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', platform: 'IFIOK-EN', environment: 'testnet' });
+});
+
+app.get('/pi-app-validation.txt', (_req, res) => {
+  const valPath = path.resolve(process.cwd(), 'public', 'pi-app-validation.txt');
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('text/plain; charset=utf-8');
+  if (fs.existsSync(valPath)) {
+    return res.send(fs.readFileSync(valPath, 'utf8').trim());
+  }
+  return res.send('piappstudio-RsKPKVTM5NR6Lji7gF8t3PUN29yGIUqI');
 });
 
 app.get(['/validation-key.txt', '/.well-known/pi-validation'], (_req, res) => {

@@ -14,7 +14,7 @@ import {
 
 const router = Router();
 
-const PI_API_BASE = 'https://api.minepi.com/v2';
+const PI_API_BASE = 'https://api.testnet.minepi.com/v2';
 const TESTNET_AMOUNT_PI = 0.01;
 const TESTNET_APP_WALLET =
   process.env.PI_TESTNET_WALLET?.trim() || 'GDD4KZEBDEJMYJYP6O5SCBHE5GGIF6K3RTHCF4ZGIWWIPGAHLTTXZB2O';
@@ -44,7 +44,7 @@ interface PiPlatformPayment {
 }
 
 function getPiApiKey(): string | null {
-  const key = process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim();
+  const key = process.env.PI_API_KEY?.trim() || process.env.PI_NETWORK_API_KEY?.trim();
   return key && key.length > 10 ? key : null;
 }
 
@@ -92,8 +92,15 @@ function validateTestnetPaymentForApp(
     };
   }
 
-  // Verify amount equals 0.01 Pi
-  if (typeof piPayment.amount === 'number' && Math.abs(piPayment.amount - TESTNET_AMOUNT_PI) > 0.00001) {
+  // Verify amount is positive (enforce 0.01 Pi specifically for testnet_test)
+  if (typeof piPayment.amount !== 'number' || piPayment.amount <= 0) {
+    return {
+      valid: false,
+      statusCode: 400,
+      error: `Invalid Pi payment amount (${piPayment.amount ?? 'unknown'}).`,
+    };
+  }
+  if (piPayment.metadata?.type === 'testnet_test' && Math.abs(piPayment.amount - TESTNET_AMOUNT_PI) > 0.00001) {
     return {
       valid: false,
       statusCode: 400,
@@ -120,7 +127,7 @@ router.get('/status', (_req, res) => {
     app: 'IFIOK-EN',
     appUrl: TESTNET_APP_URL,
     environment: 'testnet',
-    sandbox: true,
+    apiBase: PI_API_BASE,
     sdkVersion: '2.0',
     direction: 'user_to_app',
     testAmountPi: TESTNET_AMOUNT_PI,
@@ -236,10 +243,10 @@ router.post('/auth', async (req, res) => {
   }
 });
 
-// Single-hop fast Server Approval (< 5 seconds) to prevent Pi Wallet "Payment Expired" timeout
+// Single-hop fast Server Approval (< 5 seconds) to prevent Pi Wallet "Payment Expired" timeout.
+// Approve FIRST on Pi Testnet Platform API, then save database record.
 router.post('/approve', optionalAuth, async (req, res) => {
   const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId.trim() : '';
-  // Never trust browser-supplied username or piUid; use verified session identity only
   const verifiedUsername = req.authUser?.pi_username || '';
   const verifiedPiUid = req.authUser?.pi_uid || '';
 
@@ -247,8 +254,11 @@ router.post('/approve', optionalAuth, async (req, res) => {
     return res.status(400).json({ success: false, ok: false, error: 'paymentId is required for server approval.' });
   }
 
+  console.log('Approve called', { paymentId });
+
   const piKey = getPiApiKey();
   if (!piKey) {
+    console.error('Approve failed', { paymentId, error: 'PI_API_KEY missing' });
     recordSecurityEvent(
       'pi_testnet_missing_api_key',
       'warning',
@@ -259,57 +269,20 @@ router.post('/approve', optionalAuth, async (req, res) => {
     return res.status(503).json({
       success: false,
       ok: false,
-      error: 'PI_NETWORK_API_KEY is not configured on the server. Add your Pi Developer Portal Testnet Server API Key to PI_NETWORK_API_KEY.',
+      error: 'PI_API_KEY is not configured on the server. Add your Pi Developer Portal Testnet Server API Key to PI_API_KEY.',
     });
   }
 
   const startedAt = Date.now();
   try {
-    // 1. Inspect payment on Pi Platform API first to confirm direction, amount, user, and metadata
-    const inspectRes = await fetchWithTimeout(
-      `${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}`,
-      { headers: { Authorization: `Key ${piKey}` } },
-      4500
-    );
-    if (!inspectRes.ok) {
-      const errText = await inspectRes.text();
-      return res.status(502).json({
-        success: false,
-        ok: false,
-        error: `Pi Platform API rejected payment lookup (${inspectRes.status}): ${errText || 'Not found'}`,
-      });
-    }
-    const inspectedJson = (await inspectRes.json()) as PiPlatformPayment;
-    const preValidation = validateTestnetPaymentForApp(inspectedJson, paymentId, verifiedPiUid || undefined);
-    if (!preValidation.valid) {
-      return res.status(preValidation.statusCode).json({ success: false, ok: false, error: preValidation.error });
-    }
-    if (inspectedJson.status?.cancelled || inspectedJson.status?.user_cancelled) {
-      return res.status(409).json({ success: false, ok: false, error: 'Payment was already cancelled.' });
-    }
-    if (inspectedJson.status?.developer_approved) {
-      return res.json({
-        success: true,
-        ok: true,
-        approved: true,
-        alreadyApproved: true,
-        paymentId,
-        amount: TESTNET_AMOUNT_PI,
-        username: verifiedUsername,
-        status: 'approved',
-        environment: 'testnet',
-        elapsedMs: Date.now() - startedAt,
-      });
-    }
-
-    // 2. Approve payment
+    // Call Pi Testnet /approve immediately (no DB delay and no extra lookup RTT beforehand)
     const approveRes = await fetchWithTimeout(
       `${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/approve`,
       {
         method: 'POST',
         headers: { Authorization: `Key ${piKey}` },
       },
-      4500
+      4200
     );
 
     const rawText = await approveRes.text();
@@ -323,9 +296,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
     const elapsedMs = Date.now() - startedAt;
 
     if (!approveRes.ok) {
-      console.error(
-        `[PI TESTNET APPROVE FAIL] paymentId=${paymentId} status=${approveRes.status} ms=${elapsedMs} body=${rawText.slice(0, 300)}`
-      );
+      console.error('Approve failed', { paymentId, status: approveRes.status, elapsedMs, body: rawText.slice(0, 300) });
       db.prepare(`
         INSERT INTO pi_testnet_payments (payment_id, username, pi_uid, user_id, amount_pi, memo, metadata_json, status, error_message)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'failed', ?)
@@ -343,7 +314,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
         '{}',
         rawText.slice(0, 400)
       );
-      return res.status(502).json({
+      return res.status(approveRes.status >= 400 && approveRes.status < 500 ? approveRes.status : 502).json({
         success: false,
         ok: false,
         error: `Pi Server Approval failed (${approveRes.status}): ${rawText || 'Unknown error'}`,
@@ -352,6 +323,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
 
     const validation = validateTestnetPaymentForApp(approvedJson, paymentId, verifiedPiUid || undefined);
     if (!validation.valid) {
+      console.error('Approve failed', { paymentId, error: validation.error });
       recordSecurityEvent(
         'pi_testnet_approval_validation_failed',
         'warning',
@@ -362,6 +334,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
       return res.status(validation.statusCode).json({ success: false, ok: false, error: validation.error });
     }
 
+    const resolvedAmount = typeof approvedJson.amount === 'number' ? approvedJson.amount : TESTNET_AMOUNT_PI;
     const resolvedUid = verifiedPiUid || approvedJson.user_uid || '';
 
     db.prepare(`
@@ -380,7 +353,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
       verifiedUsername,
       resolvedUid,
       req.authUser?.id ?? null,
-      TESTNET_AMOUNT_PI,
+      resolvedAmount,
       approvedJson.memo || 'IFIOK-EN Testnet Test',
       JSON.stringify(approvedJson.metadata || {}),
       JSON.stringify(approvedJson)
@@ -389,21 +362,19 @@ router.post('/approve', optionalAuth, async (req, res) => {
     recordAudit(req.authUser?.id ?? null, 'pi_testnet_approved', 'pi_testnet_payment', paymentId, req.ip || '', {
       paymentId,
       username: verifiedUsername,
-      amount: TESTNET_AMOUNT_PI,
+      amount: resolvedAmount,
       elapsedMs,
       environment: 'testnet',
     });
 
-    console.log(
-      `[PI TESTNET APPROVE OK] paymentId=${paymentId} username=${verifiedUsername || 'pi-user'} amount=${TESTNET_AMOUNT_PI} elapsedMs=${elapsedMs}`
-    );
+    console.log('Approve success', { paymentId, amount: resolvedAmount, elapsedMs });
 
     return res.json({
       success: true,
       ok: true,
       approved: true,
       paymentId,
-      amount: TESTNET_AMOUNT_PI,
+      amount: resolvedAmount,
       username: verifiedUsername,
       status: 'approved',
       environment: 'testnet',
@@ -411,7 +382,7 @@ router.post('/approve', optionalAuth, async (req, res) => {
     });
   } catch (err) {
     const elapsedMs = Date.now() - startedAt;
-    console.error(`[PI TESTNET APPROVE ERROR] paymentId=${paymentId} elapsedMs=${elapsedMs}`, err);
+    console.error('Approve failed', { paymentId, elapsedMs, error: err instanceof Error ? err.message : String(err) });
     return res.status(502).json({
       success: false,
       ok: false,
@@ -500,17 +471,11 @@ router.post('/complete', optionalAuth, async (req, res) => {
     }
 
     const piPayment = (await inspectRes.json()) as PiPlatformPayment;
-    if (typeof piPayment.amount !== 'number' || Math.abs(piPayment.amount - TESTNET_AMOUNT_PI) > 0.00001) {
-      return res.status(400).json({
-        success: false,
-        ok: false,
-        error: `Invalid Testnet test amount. Expected ${TESTNET_AMOUNT_PI} Pi, received ${piPayment.amount ?? 'unknown'}.`,
-      });
-    }
     const validation = validateTestnetPaymentForApp(piPayment, paymentId, verifiedPiUid || undefined);
     if (!validation.valid) {
       return res.status(validation.statusCode).json({ success: false, ok: false, error: validation.error });
     }
+    const resolvedAmount = typeof piPayment.amount === 'number' ? piPayment.amount : TESTNET_AMOUNT_PI;
     if (piPayment.transaction?.txid && piPayment.transaction.txid !== txid) {
       return res.status(409).json({ success: false, ok: false, error: 'Submitted txid does not match Pi Platform record.' });
     }
@@ -548,7 +513,7 @@ router.post('/complete', optionalAuth, async (req, res) => {
         verifiedUsername,
         verifiedPiUid || piPayment.user_uid || '',
         req.authUser?.id ?? null,
-        TESTNET_AMOUNT_PI,
+        resolvedAmount,
         errText.slice(0, 400)
       );
 
@@ -601,7 +566,7 @@ router.post('/complete', optionalAuth, async (req, res) => {
       finalUsername,
       resolvedUid,
       req.authUser?.id ?? null,
-      TESTNET_AMOUNT_PI,
+      resolvedAmount,
       completedJson.memo || piPayment.memo || 'IFIOK-EN Testnet Test',
       JSON.stringify(completedJson.metadata || piPayment.metadata || {}),
       JSON.stringify(completedJson)
@@ -611,13 +576,13 @@ router.post('/complete', optionalAuth, async (req, res) => {
       paymentId,
       txid,
       username: finalUsername,
-      amount: TESTNET_AMOUNT_PI,
+      amount: resolvedAmount,
       elapsedMs,
       environment: 'testnet',
     });
 
     console.log(
-      `[PI TESTNET COMPLETE OK] paymentId=${paymentId} txid=${txid} username=${finalUsername || 'pi-user'} amount=${TESTNET_AMOUNT_PI} elapsedMs=${elapsedMs}`
+      `[PI TESTNET COMPLETE OK] paymentId=${paymentId} txid=${txid} username=${finalUsername || 'pi-user'} amount=${resolvedAmount} elapsedMs=${elapsedMs}`
     );
 
     return res.json({
@@ -626,7 +591,7 @@ router.post('/complete', optionalAuth, async (req, res) => {
       completed: true,
       paymentId,
       txid,
-      amount: TESTNET_AMOUNT_PI,
+      amount: resolvedAmount,
       username: finalUsername,
       status: 'completed',
       environment: 'testnet',
@@ -645,14 +610,15 @@ router.post('/complete', optionalAuth, async (req, res) => {
 router.post('/cancel', optionalAuth, async (req, res) => {
   const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId.trim() : '';
   const verifiedUsername = req.authUser?.pi_username || '';
-  const attemptServerCancel = Boolean(req.body?.attemptServerCancel);
 
   if (!paymentId) {
     return res.status(400).json({ success: false, ok: false, error: 'paymentId is required.' });
   }
 
+  console.log('Cancel called', { paymentId });
+
   const piKey = getPiApiKey();
-  if (attemptServerCancel && piKey) {
+  if (piKey) {
     await fetchWithTimeout(
       `${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/cancel`,
       {
@@ -671,7 +637,7 @@ router.post('/cancel', optionalAuth, async (req, res) => {
       updated_at = datetime('now')
   `).run(paymentId, verifiedUsername, req.authUser?.id ?? null, TESTNET_AMOUNT_PI);
 
-  return res.json({ success: true, ok: true, cancelled: true, paymentId });
+  return res.json({ success: true, ok: true, cancelled: true, paymentId, environment: 'testnet' });
 });
 
 router.get('/payments', optionalAuth, async (req, res) => {

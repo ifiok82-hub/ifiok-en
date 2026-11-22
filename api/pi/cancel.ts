@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const PI_API_BASE = 'https://api.minepi.com/v2';
+const PI_TESTNET_API_BASE = 'https://api.testnet.minepi.com/v2';
 
 type Req = IncomingMessage & { body?: Record<string, unknown> };
 type Res = ServerResponse;
@@ -33,18 +33,32 @@ export default async function handler(req: Req, res: Res) {
 
   const body = await readJsonBody(req);
   const paymentId = typeof body.paymentId === 'string' ? body.paymentId.trim() : '';
-  const attemptServerCancel = Boolean(body.attemptServerCancel);
   if (!paymentId) {
     return sendJson(res, 400, { success: false, ok: false, error: 'paymentId is required.' });
   }
 
-  const piKey = process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim();
-  if (attemptServerCancel && piKey && piKey.length > 10) {
-    await fetch(`${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/cancel`, {
-      method: 'POST',
-      headers: { Authorization: `Key ${piKey}` },
-    }).catch(() => undefined);
+  console.log('Cancel called', { paymentId });
+
+  const piKey = process.env.PI_API_KEY?.trim() || process.env.PI_NETWORK_API_KEY?.trim();
+  if (piKey && piKey.length > 10) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    try {
+      const cancelRes = await fetch(
+        `${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}/cancel`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Key ${piKey}` },
+          signal: controller.signal,
+        }
+      );
+      console.log('Cancel response', { paymentId, status: cancelRes.status });
+    } catch (err) {
+      console.error('Cancel failed', { paymentId, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  return sendJson(res, 200, { success: true, ok: true, cancelled: true, paymentId });
+  return sendJson(res, 200, { success: true, ok: true, cancelled: true, paymentId, environment: 'testnet' });
 }

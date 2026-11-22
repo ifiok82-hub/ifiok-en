@@ -16,6 +16,7 @@ import {
   startAppStudioHeartbeat,
 } from './lib/appStudio.ts';
 import {
+  autoAuthenticatePi,
   connectWithPi,
   getStoredPiAuth,
   logoutPi,
@@ -178,25 +179,6 @@ export default function App() {
     },
     [user]
   );
-
-  useEffect(() => {
-    const cleanupBridge = initAppStudioBridge();
-    startAppStudioHeartbeat();
-    const t500 = window.setTimeout(sendTokenToAppStudioNow, 500);
-    const t2000 = window.setTimeout(sendTokenToAppStudioNow, 2000);
-    void waitForPiSdk(6000);
-    void revalidateStoredPiAuth().then((valid) => setPiAuth(valid));
-    const syncPi = () => setPiAuth(getStoredPiAuth());
-    window.addEventListener(PI_AUTH_EVENT, syncPi);
-    window.addEventListener('storage', syncPi);
-    return () => {
-      window.clearTimeout(t500);
-      window.clearTimeout(t2000);
-      cleanupBridge();
-      window.removeEventListener(PI_AUTH_EVENT, syncPi);
-      window.removeEventListener('storage', syncPi);
-    };
-  }, []);
 
   useEffect(() => {
     const onPopState = () => {
@@ -376,6 +358,34 @@ export default function App() {
       loadSession();
     }
   }, [loadSummary, loadSession]);
+
+  useEffect(() => {
+    const cleanupBridge = initAppStudioBridge();
+    startAppStudioHeartbeat();
+    const t500 = window.setTimeout(sendTokenToAppStudioNow, 500);
+    const t2000 = window.setTimeout(sendTokenToAppStudioNow, 2000);
+    void waitForPiSdk(6000).then((ready) => {
+      if (ready && !getStoredPiAuth()) {
+        void autoAuthenticatePi().then((session) => {
+          if (session) {
+            setPiAuth(session);
+            void loadSession();
+          }
+        });
+      }
+    });
+    void revalidateStoredPiAuth().then((valid) => setPiAuth(valid));
+    const syncPi = () => setPiAuth(getStoredPiAuth());
+    window.addEventListener(PI_AUTH_EVENT, syncPi);
+    window.addEventListener('storage', syncPi);
+    return () => {
+      window.clearTimeout(t500);
+      window.clearTimeout(t2000);
+      cleanupBridge();
+      window.removeEventListener(PI_AUTH_EVENT, syncPi);
+      window.removeEventListener('storage', syncPi);
+    };
+  }, [loadSession]);
 
   const handleOpenDivision = (tab: DivisionTab, sub: AcademySubView = 'courses') => {
     setDivisionTab(tab);

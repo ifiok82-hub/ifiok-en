@@ -14,8 +14,10 @@ import {
 
 const router = Router();
 
+const PI_TESTNET_API_BASE = 'https://api.testnet.minepi.com/v2';
+
 function getPiApiKey(): string | null {
-  const key = process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim();
+  const key = process.env.PI_API_KEY?.trim() || process.env.PI_NETWORK_API_KEY?.trim();
   return key && key.length > 10 ? key : null;
 }
 
@@ -308,20 +310,25 @@ router.post('/pi/approve', requireAuth, async (req, res) => {
 
   const piKey = getPiApiKey();
   if (!piKey) {
-    recordSecurityEvent('pi_missing_api_key', 'warning', req.authUser!.id, req.ip || '', 'Attempted Pi payment approval without PI_NETWORK_API_KEY configured');
+    recordSecurityEvent('pi_missing_api_key', 'warning', req.authUser!.id, req.ip || '', 'Attempted Pi payment approval without PI_API_KEY configured');
     return res.status(503).json({
-      error: 'Pi Network server verification key (PI_NETWORK_API_KEY) is not configured on the server. Payment cannot be approved without live server verification.',
+      error: 'Pi Network server verification key (PI_API_KEY) is not configured on the server. Payment cannot be approved without live server verification.',
     });
   }
 
+  console.log('Approve called', { paymentId, orderId });
+
   try {
-    const inspectRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}`, {
+    const approveRes = await fetch(`${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}/approve`, {
+      method: 'POST',
       headers: { Authorization: `Key ${piKey}` },
     });
-    if (!inspectRes.ok) {
-      return res.status(502).json({ error: `Pi Platform API rejected payment lookup (${inspectRes.status}).` });
+    if (!approveRes.ok) {
+      const txt = await approveRes.text();
+      console.error('Approve failed', { paymentId, status: approveRes.status, body: txt.slice(0, 200) });
+      return res.status(502).json({ error: `Pi Testnet Server Approval failed (${approveRes.status}): ${txt}` });
     }
-    const paymentData = (await inspectRes.json()) as {
+    const paymentData = (await approveRes.json()) as {
       identifier?: string;
       amount?: number;
       direction?: string;
@@ -333,6 +340,9 @@ router.post('/pi/approve', requireAuth, async (req, res) => {
 
     if (paymentData.direction && paymentData.direction !== 'user_to_app') {
       return res.status(400).json({ error: `Invalid payment direction (${paymentData.direction}). Expected user_to_app.` });
+    }
+    if (paymentData.network && !paymentData.network.toLowerCase().includes('testnet')) {
+      return res.status(403).json({ error: 'Only Pi Testnet payments are permitted.' });
     }
     if (req.authUser?.pi_uid && paymentData.user_uid && paymentData.user_uid !== req.authUser.pi_uid) {
       return res.status(403).json({ error: 'Payment payer identity does not match authenticated user.' });
@@ -348,28 +358,17 @@ router.post('/pi/approve', requireAuth, async (req, res) => {
       return res.status(409).json({ error: 'Pi payment was cancelled.' });
     }
 
-    const approvedJson = paymentData.status?.developer_approved
-      ? paymentData
-      : await (async () => {
-          const approveRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}/approve`, {
-            method: 'POST',
-            headers: { Authorization: `Key ${piKey}` },
-          });
-          if (!approveRes.ok) {
-            const txt = await approveRes.text();
-            throw new Error(`Pi Server Approval failed: ${txt}`);
-          }
-          return approveRes.json();
-        })();
     db.prepare(`
       UPDATE payments
       SET pi_payment_id = ?, status = 'approved', verification_payload_json = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(paymentId, JSON.stringify(approvedJson), order.pay_id);
+    `).run(paymentId, JSON.stringify(paymentData), order.pay_id);
 
     recordAudit(req.authUser!.id, 'pi_payment_approved', 'payment', order.pay_id, req.ip || '', { paymentId });
+    console.log('Approve success', { paymentId, orderId });
     return res.json({ approved: true, paymentId });
   } catch (err) {
+    console.error('Approve failed', { paymentId, error: String(err) });
     return res.status(502).json({ error: `Pi Server communication error: ${String(err)}` });
   }
 });
@@ -430,7 +429,7 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
   }
 
   try {
-    const inspectRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}`, {
+    const inspectRes = await fetch(`${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}`, {
       headers: { Authorization: `Key ${piKey}` },
     });
     if (!inspectRes.ok) {
@@ -440,12 +439,16 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
       amount?: number;
       direction?: string;
       user_uid?: string;
+      network?: string;
       status?: { developer_completed?: boolean; transaction_verified?: boolean };
       transaction?: { txid?: string; verified?: boolean } | null;
     };
 
     if (inspectedPayload.direction && inspectedPayload.direction !== 'user_to_app') {
       return res.status(400).json({ error: `Invalid payment direction (${inspectedPayload.direction}).` });
+    }
+    if (inspectedPayload.network && !inspectedPayload.network.toLowerCase().includes('testnet')) {
+      return res.status(403).json({ error: 'Only Pi Testnet payments are permitted.' });
     }
     if (req.authUser?.pi_uid && inspectedPayload.user_uid && inspectedPayload.user_uid !== req.authUser.pi_uid) {
       return res.status(403).json({ error: 'Payment payer identity mismatch.' });
@@ -465,7 +468,7 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
     const completedPayload = alreadyDoneOnPi
       ? inspectedPayload
       : await (async () => {
-          const completeRes = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}/complete`, {
+          const completeRes = await fetch(`${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}/complete`, {
             method: 'POST',
             headers: {
               Authorization: `Key ${piKey}`,
@@ -902,12 +905,11 @@ router.post('/orders/:orderId/fulfill', requireAuth, (req, res) => {
 router.post('/pi/cancel', requireAuth, async (req, res) => {
   const orderId = Number(req.body?.orderId);
   const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId.trim() : '';
-  const attemptServerCancel = Boolean(req.body?.attemptServerCancel);
   if (!orderId) return res.status(400).json({ error: 'orderId required' });
 
   const piKey = getPiApiKey();
-  if (attemptServerCancel && paymentId && piKey) {
-    await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(paymentId)}/cancel`, {
+  if (paymentId && piKey) {
+    await fetch(`${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}/cancel`, {
       method: 'POST',
       headers: { Authorization: `Key ${piKey}` },
     }).catch(() => undefined);

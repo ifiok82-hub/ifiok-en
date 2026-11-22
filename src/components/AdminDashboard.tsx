@@ -2394,7 +2394,7 @@ export function AdminDashboard({ user, onNavigateView, onRefreshSummary }: Admin
                 </div>
 
                 <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-900 dark:text-amber-200">
-                  Pi Network Settlement Mode: <strong>Testnet (sandbox: true)</strong>. Mainnet remains locked until official Mainnet credentials and platform approvals are provisioned.
+                  Pi Network Settlement Mode: <strong>Pi Testnet (api.testnet.minepi.com)</strong>. Mainnet remains locked until official Mainnet credentials and platform approvals are provisioned.
                 </div>
 
                 <button

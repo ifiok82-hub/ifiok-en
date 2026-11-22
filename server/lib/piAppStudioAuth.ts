@@ -30,6 +30,7 @@ export async function exchangePiTokenWithAppStudio(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    console.log('AppStudio auth sent');
     const res = await fetch(APP_STUDIO_LOGIN_URL, {
       method: 'POST',
       headers: {
@@ -43,6 +44,7 @@ export async function exchangePiTokenWithAppStudio(
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
+      console.error('AppStudio auth failed', { status: res.status });
       throw new AppStudioAuthError(
         `App Studio authentication failed (${res.status}): ${errText || 'Unauthorized'}`,
         res.status >= 500 ? 502 : 401
@@ -55,26 +57,16 @@ export async function exchangePiTokenWithAppStudio(
       uid?: string;
       username?: string;
       user?: { uid?: string; username?: string };
-      data?: { sessionToken?: string; user?: { uid?: string; username?: string } };
+      data?: { sessionToken?: string; uid?: string; username?: string; user?: { uid?: string; username?: string } };
     };
 
-    let uid = payload?.user?.uid || payload?.data?.user?.uid || payload?.uid || '';
-    let username = payload?.user?.username || payload?.data?.user?.username || payload?.username || '';
+    const uid = payload?.user?.uid || payload?.data?.user?.uid || payload?.data?.uid || payload?.uid || '';
+    const username =
+      payload?.user?.username || payload?.data?.user?.username || payload?.data?.username || payload?.username || '';
     const sessionToken = payload?.sessionToken || payload?.data?.sessionToken || payload?.token || '';
 
     if (!uid || !username) {
-      const meRes = await fetch('https://api.minepi.com/v2/me', {
-        headers: { Authorization: `Bearer ${cleaned}` },
-        signal: controller.signal,
-      }).catch(() => null);
-      if (meRes && meRes.ok) {
-        const meData = (await meRes.json().catch(() => ({}))) as { uid?: string; username?: string };
-        uid = uid || meData.uid || '';
-        username = username || meData.username || '';
-      }
-    }
-
-    if (!uid || !username) {
+      console.error('AppStudio auth failed', { reason: 'Incomplete App Studio user identity' });
       throw new AppStudioAuthError('App Studio returned an incomplete user identity.', 401);
     }
 
@@ -87,6 +79,7 @@ export async function exchangePiTokenWithAppStudio(
     };
   } catch (err) {
     if (err instanceof AppStudioAuthError) throw err;
+    console.error('AppStudio auth failed', { error: err instanceof Error ? err.message : String(err) });
     throw new AppStudioAuthError(
       `Unable to reach App Studio auth service: ${err instanceof Error ? err.message : String(err)}`,
       502

@@ -34,10 +34,6 @@ export default async function handler(req: Req, res: Res) {
 
   const body = await readJsonBody(req);
   const accessToken = typeof body.accessToken === 'string' ? body.accessToken.trim() : '';
-  const appStudioSession =
-    typeof body.appStudioSession === 'string' && body.appStudioSession.trim()
-      ? body.appStudioSession.trim()
-      : 'piappstudio-RsKPKVTM5NR6Lji7gF8t3PUN29yGIUqI';
 
   if (!accessToken) {
     return sendJson(res, 400, { success: false, ok: false, error: 'Pi accessToken is required.' });
@@ -46,7 +42,8 @@ export default async function handler(req: Req, res: Res) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 9000);
   try {
-    // Exchange accessToken with App Studio; ignore any browser-supplied uid/username
+    // Send ONLY { accessToken } to IFIOK-EN App Studio backend; trust ONLY App Studio uid/username.
+    console.log('AppStudio auth sent');
     const appStudioRes = await fetch(APP_STUDIO_LOGIN_URL, {
       method: 'POST',
       headers: {
@@ -60,6 +57,7 @@ export default async function handler(req: Req, res: Res) {
 
     if (!appStudioRes.ok) {
       const errBody = await appStudioRes.text().catch(() => '');
+      console.error('AppStudio auth failed', { status: appStudioRes.status });
       return sendJson(res, 401, {
         success: false,
         ok: false,
@@ -73,40 +71,28 @@ export default async function handler(req: Req, res: Res) {
       uid?: string;
       username?: string;
       user?: { uid?: string; username?: string };
-      data?: { sessionToken?: string; user?: { uid?: string; username?: string } };
+      data?: { sessionToken?: string; uid?: string; username?: string; user?: { uid?: string; username?: string } };
     };
 
-    let uid = data?.user?.uid || data?.data?.user?.uid || data?.uid || '';
-    let username = data?.user?.username || data?.data?.user?.username || data?.username || '';
+    const uid = data?.user?.uid || data?.data?.user?.uid || data?.data?.uid || data?.uid || '';
+    const username =
+      data?.user?.username || data?.data?.user?.username || data?.data?.username || data?.username || '';
     const sessionToken = data?.sessionToken || data?.data?.sessionToken || data?.token || '';
 
-    // If App Studio accepted the token (200 OK) without full user fields, verify /v2/me server-side
     if (!uid || !username) {
-      const meRes = await fetch('https://api.minepi.com/v2/me', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        signal: controller.signal,
-      }).catch(() => null);
-      if (meRes && meRes.ok) {
-        const meData = (await meRes.json().catch(() => ({}))) as { uid?: string; username?: string };
-        uid = uid || meData.uid || '';
-        username = username || meData.username || '';
-      }
+      console.error('AppStudio auth failed', { reason: 'Incomplete App Studio user identity' });
+      return sendJson(res, 401, {
+        success: false,
+        ok: false,
+        error: 'Incomplete App Studio user identity.',
+      });
     }
-
-    if (!uid || !username) {
-      return sendJson(res, 401, { success: false, ok: false, error: 'Incomplete App Studio user identity.' });
-    }
-
-    console.log(
-      `[PI APPSTUDIO AUTH] verified @${username} (${uid}) session=${appStudioSession}`
-    );
 
     return sendJson(res, 200, {
       success: true,
       ok: true,
       username,
       uid,
-      appStudioSession,
       sessionToken,
       piUser: {
         uid,
@@ -114,6 +100,7 @@ export default async function handler(req: Req, res: Res) {
       },
     });
   } catch (err) {
+    console.error('AppStudio auth failed', { error: err instanceof Error ? err.message : String(err) });
     return sendJson(res, 502, {
       success: false,
       ok: false,

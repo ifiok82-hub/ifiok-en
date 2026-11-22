@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const PI_API_BASE = 'https://api.minepi.com/v2';
-const TESTNET_AMOUNT_PI = 0.01;
+const PI_TESTNET_API_BASE = 'https://api.testnet.minepi.com/v2';
 
 type Req = IncomingMessage & { body?: Record<string, unknown> };
 type Res = ServerResponse & {
@@ -47,7 +46,7 @@ interface PiPaymentRecord {
 }
 
 function getPiApiKey(): string {
-  return process.env.PI_NETWORK_API_KEY?.trim() || process.env.PI_API_KEY?.trim() || '';
+  return process.env.PI_API_KEY?.trim() || process.env.PI_NETWORK_API_KEY?.trim() || '';
 }
 
 function validateU2APayment(
@@ -63,8 +62,11 @@ function validateU2APayment(
   if (payment.network && !payment.network.toLowerCase().includes('testnet')) {
     return { valid: false, statusCode: 403, error: `Only Pi Testnet payments are permitted (received ${payment.network}).` };
   }
-  if (typeof payment.amount !== 'number' || Math.abs(payment.amount - TESTNET_AMOUNT_PI) > 0.00001) {
-    return { valid: false, statusCode: 400, error: `Expected ${TESTNET_AMOUNT_PI} Pi, received ${payment.amount ?? 'unknown'}.` };
+  if (typeof payment.amount !== 'number' || payment.amount <= 0) {
+    return { valid: false, statusCode: 400, error: `Invalid Pi payment amount (${payment.amount ?? 'unknown'}).` };
+  }
+  if (payment.metadata?.type === 'testnet_test' && Math.abs(payment.amount - 0.01) > 0.00001) {
+    return { valid: false, statusCode: 400, error: `Expected 0.01 Pi for Testnet test, received ${payment.amount}.` };
   }
   if (payment.metadata?.app && payment.metadata.app !== 'ifiok-en') {
     return { valid: false, statusCode: 403, error: 'Payment metadata does not belong to IFIOK-EN.' };
@@ -84,68 +86,31 @@ export default async function handler(req: Req, res: Res) {
     return sendJson(res, 400, { success: false, ok: false, error: 'paymentId is required.' });
   }
 
+  console.log('Approve called', { paymentId });
+
   const piKey = getPiApiKey();
   if (!piKey || piKey.length <= 10) {
+    console.error('Approve failed', { paymentId, error: 'PI_API_KEY missing' });
     return sendJson(res, 503, {
       success: false,
       ok: false,
-      error: 'PI_NETWORK_API_KEY is not configured on the server.',
+      error: 'PI_API_KEY is not configured on the server.',
     });
   }
 
+  const startedAt = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4500);
+  const timer = setTimeout(() => controller.abort(), 4200);
   try {
-    // 1. Retrieve & validate payment from Pi Platform API before approving
-    const inspectRes = await fetch(`${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}`, {
-      headers: { Authorization: `Key ${piKey}` },
-      signal: controller.signal,
-    });
-    const inspectText = await inspectRes.text();
-    let inspected: PiPaymentRecord = {};
-    try {
-      inspected = inspectText ? (JSON.parse(inspectText) as PiPaymentRecord) : {};
-    } catch {
-      inspected = {};
-    }
-
-    if (!inspectRes.ok) {
-      return sendJson(res, 502, {
-        success: false,
-        ok: false,
-        error: `Pi payment lookup failed (${inspectRes.status}): ${inspectText}`,
-      });
-    }
-
-    const preCheck = validateU2APayment(inspected, paymentId);
-    if (!preCheck.valid) {
-      return sendJson(res, preCheck.statusCode, { success: false, ok: false, error: preCheck.error });
-    }
-
-    if (inspected.status?.cancelled || inspected.status?.user_cancelled) {
-      return sendJson(res, 409, { success: false, ok: false, error: 'Payment was already cancelled.' });
-    }
-
-    // Idempotent retry if Pi already recorded developer_approved
-    if (inspected.status?.developer_approved) {
-      return sendJson(res, 200, {
-        success: true,
-        ok: true,
-        approved: true,
-        alreadyApproved: true,
-        paymentId,
-        amount: TESTNET_AMOUNT_PI,
-        status: 'approved',
-        environment: 'testnet',
-      });
-    }
-
-    // 2. Approve on Pi Platform API
-    const approveRes = await fetch(`${PI_API_BASE}/payments/${encodeURIComponent(paymentId)}/approve`, {
-      method: 'POST',
-      headers: { Authorization: `Key ${piKey}` },
-      signal: controller.signal,
-    });
+    // Immediate single-hop Testnet approval (no DB delay, no pre-lookup RTT)
+    const approveRes = await fetch(
+      `${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}/approve`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Key ${piKey}` },
+        signal: controller.signal,
+      }
+    );
     const rawText = await approveRes.text();
     let approvedJson: PiPaymentRecord = {};
     try {
@@ -154,35 +119,41 @@ export default async function handler(req: Req, res: Res) {
       approvedJson = {};
     }
 
+    const elapsedMs = Date.now() - startedAt;
+
     if (!approveRes.ok) {
-      console.error(`[VERCEL PI APPROVE FAIL] paymentId=${paymentId} status=${approveRes.status} body=${rawText.slice(0, 300)}`);
-      return sendJson(res, 502, {
+      console.error('Approve failed', { paymentId, status: approveRes.status, elapsedMs, body: rawText.slice(0, 300) });
+      return sendJson(res, approveRes.status >= 400 && approveRes.status < 500 ? approveRes.status : 502, {
         success: false,
         ok: false,
-        error: `Pi Server Approval failed (${approveRes.status}): ${rawText}`,
+        error: `Pi Testnet Server Approval failed (${approveRes.status}): ${rawText || 'Unknown error'}`,
       });
     }
 
     const postCheck = validateU2APayment(approvedJson, paymentId);
     if (!postCheck.valid) {
+      console.error('Approve failed', { paymentId, error: postCheck.error });
       return sendJson(res, postCheck.statusCode, { success: false, ok: false, error: postCheck.error });
     }
 
-    console.log(`[VERCEL PI APPROVE OK] paymentId=${paymentId}`);
+    console.log('Approve success', { paymentId, amount: approvedJson.amount ?? 0.01, elapsedMs });
     return sendJson(res, 200, {
       success: true,
       ok: true,
       approved: true,
       paymentId,
-      amount: TESTNET_AMOUNT_PI,
+      amount: approvedJson.amount ?? 0.01,
       status: 'approved',
       environment: 'testnet',
+      elapsedMs,
     });
   } catch (err) {
+    const elapsedMs = Date.now() - startedAt;
+    console.error('Approve failed', { paymentId, elapsedMs, error: err instanceof Error ? err.message : String(err) });
     return sendJson(res, 502, {
       success: false,
       ok: false,
-      error: `Pi approval request error: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Pi Testnet approval request error: ${err instanceof Error ? err.message : String(err)}`,
     });
   } finally {
     clearTimeout(timer);

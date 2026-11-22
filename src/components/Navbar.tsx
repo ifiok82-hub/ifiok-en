@@ -63,7 +63,7 @@ export function Navbar({
             <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
             {piAuth ? (
               <span className="font-semibold text-emerald-300 truncate">
-                Welcome @{piAuth.username}
+                Pi Verified Testnet
               </span>
             ) : (
               <span className="font-medium text-amber-200 truncate">

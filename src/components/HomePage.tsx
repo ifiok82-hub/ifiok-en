@@ -298,7 +298,7 @@ export function HomePage({
                 {piAuth ? (
                   <div className="inline-flex items-center gap-2.5 px-4 py-2.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 text-xs font-semibold text-emerald-800 dark:text-emerald-200">
                     <ShieldCheck className="w-4 h-4 shrink-0" />
-                    <span>Welcome @{piAuth.username}</span>
+                    <span>Pi Verified Testnet</span>
                     <button
                       type="button"
                       onClick={() => void onLogoutPi()}
@@ -968,7 +968,7 @@ export function HomePage({
             {[
               {
                 title: 'Pi Network Exclusive Payments',
-                body: 'No bank cards, PayPal, Stripe, or outside crypto. Paid products & courses remain locked until api.minepi.com confirms settlement.',
+                body: 'No bank cards, PayPal, Stripe, or outside crypto. Paid products & courses remain locked until Pi Network Testnet confirms settlement.',
               },
               {
                 title: 'Account & MFA Protection',
@@ -1112,7 +1112,7 @@ export function HomePage({
                 onClick={() => (user ? onNavigateView('dashboard') : void handleHeroPiConnect())}
                 className="block text-emerald-600 dark:text-emerald-400 font-semibold hover:underline cursor-pointer"
               >
-                Welcome @{piAuth.username}
+                Pi Verified Testnet
               </button>
             ) : (
               <button

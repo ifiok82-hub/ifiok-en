@@ -49,7 +49,6 @@ app.use(
             connectSrc: [
               "'self'",
               'https://socialchain.app',
-              'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com',
               'https://api.testnet.minepi.com',
               'https:',
               'wss:',

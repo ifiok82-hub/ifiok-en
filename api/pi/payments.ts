@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const APP_STUDIO_LOGIN_URL =
-  'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com/pi/auth/v1/login';
+const PI_PLATFORM_ME_URL = 'https://api.minepi.com/v2/me';
 
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown) {
   res.statusCode = statusCode;
@@ -21,27 +20,22 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 9000);
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const appStudioRes = await fetch(APP_STUDIO_LOGIN_URL, {
-      method: 'POST',
+    const meRes = await fetch(PI_PLATFORM_ME_URL, {
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
-        Origin: 'https://ifiok-en.vercel.app',
-        Referer: 'https://ifiok-en.vercel.app/',
+        Authorization: `Bearer ${headerToken}`,
       },
-      body: JSON.stringify({ accessToken: headerToken }),
       signal: controller.signal,
     });
-    if (!appStudioRes.ok) {
+    if (!meRes.ok) {
       return sendJson(res, 403, { success: false, ok: false, error: 'Access Denied - Admin Only' });
     }
-    const data = (await appStudioRes.json().catch(() => ({}))) as {
+    const data = (await meRes.json().catch(() => ({}))) as {
       username?: string;
-      user?: { username?: string };
-      data?: { user?: { username?: string } };
     };
-    const username = data?.user?.username || data?.data?.user?.username || data?.username || '';
+    const username = typeof data?.username === 'string' ? data.username.trim() : '';
     if (username.replace(/^@/, '').toLowerCase() !== 'ifiok1967') {
       return sendJson(res, 403, { success: false, ok: false, error: 'Access Denied - Admin Only' });
     }

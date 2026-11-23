@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const APP_STUDIO_LOGIN_URL =
-  'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com/pi/auth/v1/login';
+const PI_PLATFORM_ME_URL = 'https://api.minepi.com/v2/me';
 
 type Req = IncomingMessage & { body?: Record<string, unknown> };
 type Res = ServerResponse;
@@ -39,52 +38,51 @@ export default async function handler(req: Req, res: Res) {
     return sendJson(res, 400, { success: false, ok: false, error: 'Pi accessToken is required.' });
   }
 
+  const piKey = process.env.PI_API_KEY?.trim() || process.env.PI_NETWORK_API_KEY?.trim() || '';
+  if (!piKey || piKey.length <= 10) {
+    return sendJson(res, 503, {
+      success: false,
+      ok: false,
+      error: 'PI_API_KEY is not configured on the server.',
+    });
+  }
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 9000);
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    // Send ONLY { accessToken } to IFIOK-EN App Studio backend; trust ONLY App Studio uid/username.
-    console.log('AppStudio auth sent');
-    const appStudioRes = await fetch(APP_STUDIO_LOGIN_URL, {
-      method: 'POST',
+    // Verify the Pioneer's accessToken directly with Pi Platform API; never trust frontend username/uid.
+    const meRes = await fetch(PI_PLATFORM_ME_URL, {
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
-        Origin: 'https://ifiok-en.vercel.app',
-        Referer: 'https://ifiok-en.vercel.app/',
+        Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ accessToken }),
       signal: controller.signal,
     });
 
-    if (!appStudioRes.ok) {
-      const errBody = await appStudioRes.text().catch(() => '');
-      console.error('AppStudio auth failed', { status: appStudioRes.status });
+    if (!meRes.ok) {
+      const errBody = await meRes.text().catch(() => '');
+      console.error('Pi auth verification failed', { status: meRes.status });
       return sendJson(res, 401, {
         success: false,
         ok: false,
-        error: `App Studio rejected the Pi accessToken (${appStudioRes.status})${errBody ? `: ${errBody.slice(0, 160)}` : '.'}`,
+        error: `Pi Network rejected the accessToken (${meRes.status})${errBody ? `: ${errBody.slice(0, 160)}` : '.'}`,
       });
     }
 
-    const data = (await appStudioRes.json().catch(() => ({}))) as {
-      sessionToken?: string;
-      token?: string;
+    const meData = (await meRes.json().catch(() => ({}))) as {
       uid?: string;
       username?: string;
-      user?: { uid?: string; username?: string };
-      data?: { sessionToken?: string; uid?: string; username?: string; user?: { uid?: string; username?: string } };
     };
 
-    const uid = data?.user?.uid || data?.data?.user?.uid || data?.data?.uid || data?.uid || '';
-    const username =
-      data?.user?.username || data?.data?.user?.username || data?.data?.username || data?.username || '';
-    const sessionToken = data?.sessionToken || data?.data?.sessionToken || data?.token || '';
+    const uid = typeof meData.uid === 'string' ? meData.uid.trim() : '';
+    const username = typeof meData.username === 'string' ? meData.username.trim() : '';
 
     if (!uid || !username) {
-      console.error('AppStudio auth failed', { reason: 'Incomplete App Studio user identity' });
+      console.error('Pi auth verification failed', { reason: 'Incomplete Pi user identity' });
       return sendJson(res, 401, {
         success: false,
         ok: false,
-        error: 'Incomplete App Studio user identity.',
+        error: 'Incomplete Pi user identity returned by Pi Network.',
       });
     }
 
@@ -93,18 +91,17 @@ export default async function handler(req: Req, res: Res) {
       ok: true,
       username,
       uid,
-      sessionToken,
       piUser: {
         uid,
         username,
       },
     });
   } catch (err) {
-    console.error('AppStudio auth failed', { error: err instanceof Error ? err.message : String(err) });
+    console.error('Pi auth verification error', { error: err instanceof Error ? err.message : String(err) });
     return sendJson(res, 502, {
       success: false,
       ok: false,
-      error: `Unable to reach App Studio auth server: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Unable to reach Pi verification service: ${err instanceof Error ? err.message : String(err)}`,
     });
   } finally {
     clearTimeout(timer);

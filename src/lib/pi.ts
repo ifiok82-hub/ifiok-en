@@ -226,93 +226,48 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
   }
 }
 
-const APP_STUDIO_LOGIN_URL = 'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com/pi/auth/v1/login';
-
-async function sendAccessTokenDirectlyToAppStudio(accessToken: string): Promise<{
-  ok: boolean;
-  sessionToken?: string;
-  user?: { uid: string; username: string };
-}> {
-  try {
-    console.log('AppStudio auth sent');
-    const res = await fetch(APP_STUDIO_LOGIN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accessToken }),
-    });
-    if (!res.ok) {
-      console.error('AppStudio auth failed', { status: res.status });
-      return { ok: false };
-    }
-    const raw = (await res.json().catch(() => ({}))) as {
-      sessionToken?: string;
-      token?: string;
-      uid?: string;
-      username?: string;
-      user?: { uid?: string; username?: string };
-      data?: { sessionToken?: string; uid?: string; username?: string; user?: { uid?: string; username?: string } };
-    };
-    const uid = raw.user?.uid || raw.data?.user?.uid || raw.data?.uid || raw.uid || '';
-    const username = raw.user?.username || raw.data?.user?.username || raw.data?.username || raw.username || '';
-    if (!uid || !username) {
-      console.error('AppStudio auth failed', { reason: 'Missing uid or username in App Studio response' });
-      return { ok: false };
-    }
-    return {
-      ok: true,
-      sessionToken: raw.sessionToken || raw.data?.sessionToken || raw.token || '',
-      user: { uid, username },
-    };
-  } catch (err) {
-    console.error('AppStudio auth failed', { error: err instanceof Error ? err.message : String(err) });
-    return { ok: false };
-  }
-}
-
+// App Studio backend URL removed until IFIOK-EN's own App Studio backend URL is provided.
+// Verify Pi accessToken exclusively via IFIOK-EN's own backend (/api/pi/auth).
 async function verifyAccessTokenWithAppStudio(accessToken: string): Promise<{
   uid: string;
   username: string;
   sessionToken?: string;
 }> {
-  // Send ONLY { accessToken } directly to App Studio AND via /api/pi/auth
-  const [directResult, serverResponse] = await Promise.all([
-    sendAccessTokenDirectlyToAppStudio(accessToken),
-    fetch('/api/pi/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ accessToken }),
-    }).catch(() => null),
-  ]);
+  const serverResponse = await fetch('/api/pi/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ accessToken }),
+  }).catch(() => null);
 
   const verifyData = serverResponse
     ? ((await serverResponse.json().catch(() => ({}))) as {
         success?: boolean;
         ok?: boolean;
         error?: string;
+        uid?: string;
+        username?: string;
         sessionToken?: string;
         piUser?: { uid?: string; username?: string };
       })
     : {};
 
+  const resolvedUid = verifyData.piUser?.uid || verifyData.uid || '';
+  const resolvedUsername = verifyData.piUser?.username || verifyData.username || '';
   const serverVerified = Boolean(
-    serverResponse?.ok && (verifyData.success || verifyData.ok) && verifyData.piUser?.uid && verifyData.piUser?.username
+    serverResponse?.ok && (verifyData.success || verifyData.ok) && resolvedUid && resolvedUsername
   );
 
-  // Trust ONLY App Studio uid / username (never browser-supplied fallback)
-  const resolvedUid = verifyData.piUser?.uid || directResult.user?.uid || '';
-  const resolvedUsername = verifyData.piUser?.username || directResult.user?.username || '';
-
-  if ((!serverVerified && !directResult.ok) || !resolvedUid || !resolvedUsername) {
+  if (!serverVerified) {
     throw new Error(
-      verifyData.error || 'App Studio could not verify your Pi Network identity.'
+      verifyData.error || 'IFIOK-EN backend could not verify your Pi Network identity.'
     );
   }
 
   return {
     uid: resolvedUid,
     username: resolvedUsername,
-    sessionToken: verifyData.sessionToken || directResult.sessionToken,
+    sessionToken: verifyData.sessionToken,
   };
 }
 

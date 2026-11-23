@@ -1,5 +1,4 @@
-export const APP_STUDIO_LOGIN_URL =
-  'https://backend.appstudio-u7cm9zhmha0ruwv8.piappengine.com/pi/auth/v1/login';
+const PI_PLATFORM_ME_URL = 'https://api.minepi.com/v2/me';
 
 export interface AppStudioAuthResult {
   sessionToken: string;
@@ -20,7 +19,7 @@ export class AppStudioAuthError extends Error {
 
 export async function exchangePiTokenWithAppStudio(
   accessToken: string,
-  timeoutMs = 9000
+  timeoutMs = 8000
 ): Promise<AppStudioAuthResult> {
   const cleaned = accessToken.trim();
   if (!cleaned) {
@@ -30,48 +29,38 @@ export async function exchangePiTokenWithAppStudio(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    console.log('AppStudio auth sent');
-    const res = await fetch(APP_STUDIO_LOGIN_URL, {
-      method: 'POST',
+    const res = await fetch(PI_PLATFORM_ME_URL, {
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
-        Origin: 'https://ifiok-en.vercel.app',
-        Referer: 'https://ifiok-en.vercel.app/',
+        Authorization: `Bearer ${cleaned}`,
       },
-      body: JSON.stringify({ accessToken: cleaned }),
       signal: controller.signal,
     });
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      console.error('AppStudio auth failed', { status: res.status });
+      console.error('Pi auth verification failed', { status: res.status });
       throw new AppStudioAuthError(
-        `App Studio authentication failed (${res.status}): ${errText || 'Unauthorized'}`,
+        `Pi authentication failed (${res.status}): ${errText || 'Unauthorized'}`,
         res.status >= 500 ? 502 : 401
       );
     }
 
     const payload = (await res.json().catch(() => ({}))) as {
-      sessionToken?: string;
-      token?: string;
       uid?: string;
       username?: string;
-      user?: { uid?: string; username?: string };
-      data?: { sessionToken?: string; uid?: string; username?: string; user?: { uid?: string; username?: string } };
     };
 
-    const uid = payload?.user?.uid || payload?.data?.user?.uid || payload?.data?.uid || payload?.uid || '';
-    const username =
-      payload?.user?.username || payload?.data?.user?.username || payload?.data?.username || payload?.username || '';
-    const sessionToken = payload?.sessionToken || payload?.data?.sessionToken || payload?.token || '';
+    const uid = typeof payload?.uid === 'string' ? payload.uid.trim() : '';
+    const username = typeof payload?.username === 'string' ? payload.username.trim() : '';
 
     if (!uid || !username) {
-      console.error('AppStudio auth failed', { reason: 'Incomplete App Studio user identity' });
-      throw new AppStudioAuthError('App Studio returned an incomplete user identity.', 401);
+      console.error('Pi auth verification failed', { reason: 'Incomplete Pi user identity' });
+      throw new AppStudioAuthError('Pi Network returned an incomplete user identity.', 401);
     }
 
     return {
-      sessionToken,
+      sessionToken: '',
       user: {
         uid,
         username,
@@ -79,9 +68,9 @@ export async function exchangePiTokenWithAppStudio(
     };
   } catch (err) {
     if (err instanceof AppStudioAuthError) throw err;
-    console.error('AppStudio auth failed', { error: err instanceof Error ? err.message : String(err) });
+    console.error('Pi auth verification error', { error: err instanceof Error ? err.message : String(err) });
     throw new AppStudioAuthError(
-      `Unable to reach App Studio auth service: ${err instanceof Error ? err.message : String(err)}`,
+      `Unable to reach Pi verification service: ${err instanceof Error ? err.message : String(err)}`,
       502
     );
   } finally {

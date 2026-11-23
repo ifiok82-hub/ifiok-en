@@ -120,12 +120,14 @@ export function HomePage({
   const usdRate = summary?.settings.informationalUsdPerPi ?? 1.0;
 
   const handleHeroPiConnect = async () => {
+    if (piLoading) return;
     setPiHeroError(null);
     setPiLoading(true);
     try {
       await onConnectPi();
     } catch (err) {
-      setPiHeroError(err instanceof Error ? err.message : 'Unable to sign in with Pi.');
+      const reason = err instanceof Error ? err.message : 'Unable to sign in with Pi';
+      setPiHeroError(`Sign-in failed: ${reason}. Tap to try again.`);
     } finally {
       setPiLoading(false);
     }

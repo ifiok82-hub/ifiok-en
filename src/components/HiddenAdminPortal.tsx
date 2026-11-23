@@ -95,12 +95,14 @@ export function HiddenAdminPortal({
   }, [adminUnlocked, isAdminUser, loadPayments]);
 
   const handleConnect = async () => {
+    if (connecting) return;
     setAuthError(null);
     setConnecting(true);
     try {
       await onConnectPi();
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Unable to authenticate with Pi Network.');
+      const reason = err instanceof Error ? err.message : 'Unable to authenticate with Pi Network';
+      setAuthError(`Sign-in failed: ${reason}. Tap to try again.`);
     } finally {
       setConnecting(false);
     }

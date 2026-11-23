@@ -144,6 +144,34 @@ export function saveStoredPiAuth(session: PiAuthSession | null) {
   notifyPiAuthChanged(session);
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, ms);
+    promise.then(
+      (val) => {
+        window.clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        window.clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    );
+  });
+}
+
+function getPiAuthEndpoint(): string {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app')) {
+      return '/api/pi/auth';
+    }
+  }
+  return 'https://ifiok-en.vercel.app/api/pi/auth';
+}
+
 export function isPiSdkAvailable(): boolean {
   return typeof window !== 'undefined' && Boolean(window.Pi);
 }
@@ -152,21 +180,41 @@ export async function initPiTestnet(force = false): Promise<boolean> {
   if (!isPiSdkAvailable()) return false;
   if (!initialized || force) {
     initPromise = (async () => {
-      await window.Pi!.init({ version: '2.0' });
-      initialized = true;
-      return true;
+      try {
+        await withTimeout(
+          Promise.resolve(window.Pi!.init({ version: '2.0' })),
+          4000,
+          'Pi SDK initialization timed out'
+        );
+        initialized = true;
+        return true;
+      } catch (err) {
+        initPromise = null;
+        initialized = false;
+        throw err;
+      }
     })();
   }
   return initPromise ? initPromise : Promise.resolve(initialized);
 }
 
-export async function waitForPiSdk(timeoutMs = 5000): Promise<boolean> {
-  if (isPiSdkAvailable()) return initPiTestnet(false);
+export async function waitForPiSdk(timeoutMs = 3500): Promise<boolean> {
+  if (isPiSdkAvailable()) {
+    try {
+      return await initPiTestnet(false);
+    } catch {
+      return false;
+    }
+  }
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     await new Promise((r) => setTimeout(r, 120));
     if (isPiSdkAvailable()) {
-      return initPiTestnet(false);
+      try {
+        return await initPiTestnet(false);
+      } catch {
+        return false;
+      }
     }
   }
   return false;
@@ -179,6 +227,8 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
   if (!paymentId) return;
 
   const orderId = incomplete.metadata?.orderId ? Number(incomplete.metadata.orderId) : null;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 5000);
 
   try {
     if (incomplete.transaction?.txid) {
@@ -187,6 +237,7 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        signal: controller.signal,
         body: JSON.stringify({
           paymentId,
           txid,
@@ -198,6 +249,7 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
+          signal: controller.signal,
           body: JSON.stringify({ paymentId, txid }),
         }).catch(() => undefined);
       }
@@ -208,6 +260,7 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
+      signal: controller.signal,
       body: JSON.stringify({
         paymentId,
         ...(orderId ? { orderId } : {}),
@@ -218,123 +271,152 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        signal: controller.signal,
         body: JSON.stringify({ paymentId }),
       }).catch(() => undefined);
     }
   } catch {
     // Keep authentication resilient even if stale incomplete payment cleanup fails
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 
-// App Studio backend URL removed until IFIOK-EN's own App Studio backend URL is provided.
-// Verify Pi accessToken exclusively via IFIOK-EN's own backend (/api/pi/auth).
-async function verifyAccessTokenWithAppStudio(accessToken: string): Promise<{
+// Verify Pi accessToken exclusively via IFIOK-EN's own backend (/api/pi/auth) with 10s AbortController timeout.
+async function verifyAccessTokenWithBackend(accessToken: string): Promise<{
   uid: string;
   username: string;
   sessionToken?: string;
 }> {
-  const serverResponse = await fetch('/api/pi/auth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ accessToken }),
-  }).catch(() => null);
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 10000);
 
-  const verifyData = serverResponse
-    ? ((await serverResponse.json().catch(() => ({}))) as {
-        success?: boolean;
-        ok?: boolean;
-        error?: string;
-        uid?: string;
-        username?: string;
-        sessionToken?: string;
-        piUser?: { uid?: string; username?: string };
-      })
-    : {};
+  try {
+    const serverResponse = await fetch(getPiAuthEndpoint(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessToken }),
+      signal: controller.signal,
+    });
 
-  const resolvedUid = verifyData.piUser?.uid || verifyData.uid || '';
-  const resolvedUsername = verifyData.piUser?.username || verifyData.username || '';
-  const serverVerified = Boolean(
-    serverResponse?.ok && (verifyData.success || verifyData.ok) && resolvedUid && resolvedUsername
-  );
+    const verifyData = (await serverResponse.json().catch(() => ({}))) as {
+      success?: boolean;
+      ok?: boolean;
+      error?: string;
+      uid?: string;
+      username?: string;
+      sessionToken?: string;
+      piUser?: { uid?: string; username?: string };
+    };
 
-  if (!serverVerified) {
-    throw new Error(
-      verifyData.error || 'IFIOK-EN backend could not verify your Pi Network identity.'
+    const resolvedUid = verifyData.piUser?.uid || verifyData.uid || '';
+    const resolvedUsername = verifyData.piUser?.username || verifyData.username || '';
+    const serverVerified = Boolean(
+      serverResponse.ok && (verifyData.success || verifyData.ok) && resolvedUid && resolvedUsername
     );
-  }
 
-  return {
-    uid: resolvedUid,
-    username: resolvedUsername,
-    sessionToken: verifyData.sessionToken,
-  };
+    if (!serverVerified) {
+      throw new Error(
+        verifyData.error || `Server returned HTTP ${serverResponse.status}`
+      );
+    }
+
+    return {
+      uid: resolvedUid,
+      username: resolvedUsername,
+      sessionToken: verifyData.sessionToken,
+    };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Verification request timed out after 10 seconds');
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
+let inFlightConnectPromise: Promise<PiAuthSession> | null = null;
+
 export async function connectWithPi(
-  scopes: string[] = ['username', 'payments']
+  scopes: string[] = ['username']
 ): Promise<PiAuthSession> {
-  if (typeof window !== 'undefined') {
+  if (inFlightConnectPromise) {
+    return inFlightConnectPromise;
+  }
+
+  inFlightConnectPromise = (async () => {
     try {
-      window.sessionStorage.removeItem(PI_LOGGED_OUT_FLAG);
-    } catch {
-      // Ignore storage restriction
+      if (typeof window !== 'undefined') {
+        try {
+          window.sessionStorage.removeItem(PI_LOGGED_OUT_FLAG);
+        } catch {
+          // Ignore storage restriction
+        }
+      }
+
+      const ready = await waitForPiSdk(3500);
+      if (!ready || !window.Pi) {
+        throw new Error(
+          'Pi Browser not detected. Open https://ifiok-en.vercel.app inside Pi Browser'
+        );
+      }
+
+      if (!initialized) {
+        await initPiTestnet(true);
+      }
+
+      const auth = await withTimeout(
+        window.Pi.authenticate(scopes, handleIncompletePaymentFound),
+        9500,
+        'Pi Browser sign-in timed out after 10 seconds'
+      );
+      if (scopes.includes('payments')) {
+        paymentScopeAuthorized = true;
+      }
+
+      const accessToken = auth?.accessToken;
+      if (!accessToken) {
+        throw new Error('Pi Network did not return an accessToken');
+      }
+
+      const verified = await verifyAccessTokenWithBackend(accessToken);
+      const verifiedUser = { uid: verified.uid, username: verified.username };
+
+      if (typeof window !== 'undefined') {
+        window.__PI_ACCESS_TOKEN = accessToken;
+        window.__PI_USER = verifiedUser;
+        window.piAccessToken = accessToken;
+        safeSetLocalStorage('pi_access_token', accessToken);
+        safeSetLocalStorage('pi_user', JSON.stringify(verifiedUser));
+      }
+
+      startAppStudioHeartbeat();
+      sendTokenToAppStudioNow();
+      broadcastTokenToAppStudio(accessToken, verifiedUser);
+
+      const session: PiAuthSession = {
+        username: verifiedUser.username,
+        uid: verifiedUser.uid,
+        accessToken,
+        sessionToken: verified.sessionToken,
+        connectedAt: new Date().toISOString(),
+      };
+
+      saveStoredPiAuth(session);
+      return session;
+    } finally {
+      inFlightConnectPromise = null;
     }
-  }
+  })();
 
-  const ready = await waitForPiSdk(5000);
-  if (!ready || !window.Pi) {
-    throw new Error(
-      'Pi Browser runtime not detected. Open https://ifiok-en.vercel.app inside Pi Browser and tap Sign in with Pi.'
-    );
-  }
-
-  if (!initialized) {
-    await window.Pi.init({ version: '2.0' });
-    initialized = true;
-  }
-
-  const auth = await window.Pi.authenticate(scopes, handleIncompletePaymentFound);
-  if (scopes.includes('payments')) {
-    paymentScopeAuthorized = true;
-  }
-
-  const accessToken = auth?.accessToken;
-  if (!accessToken) {
-    throw new Error('Pi Network authentication did not return a valid accessToken.');
-  }
-
-  startAppStudioHeartbeat();
-  const verified = await verifyAccessTokenWithAppStudio(accessToken);
-  const verifiedUser = { uid: verified.uid, username: verified.username };
-
-  if (typeof window !== 'undefined') {
-    window.__PI_ACCESS_TOKEN = accessToken;
-    window.__PI_USER = verifiedUser;
-    window.piAccessToken = accessToken;
-    safeSetLocalStorage('pi_access_token', accessToken);
-    safeSetLocalStorage('pi_user', JSON.stringify(verifiedUser));
-  }
-
-  sendTokenToAppStudioNow();
-  broadcastTokenToAppStudio(accessToken, verifiedUser);
-
-  const session: PiAuthSession = {
-    username: verifiedUser.username,
-    uid: verifiedUser.uid,
-    accessToken,
-    sessionToken: verified.sessionToken,
-    connectedAt: new Date().toISOString(),
-  };
-
-  saveStoredPiAuth(session);
-  return session;
+  return inFlightConnectPromise;
 }
 
 let autoAuthAttempted = false;
 
 export async function autoAuthenticatePi(): Promise<PiAuthSession | null> {
-  if (typeof window === 'undefined' || autoAuthAttempted) return runtimePiAuth;
+  if (typeof window === 'undefined' || autoAuthAttempted || inFlightConnectPromise) return runtimePiAuth;
   autoAuthAttempted = true;
 
   try {
@@ -345,33 +427,7 @@ export async function autoAuthenticatePi(): Promise<PiAuthSession | null> {
     // Ignore storage restriction
   }
 
-  const ready = await waitForPiSdk(4000);
-  if (!ready || !window.Pi) return null;
-
-  try {
-    if (!initialized) {
-      await window.Pi.init({ version: '2.0' });
-      initialized = true;
-    }
-    const auth = await window.Pi.authenticate(['username'], handleIncompletePaymentFound);
-    const accessToken = auth?.accessToken;
-    if (!accessToken) return null;
-
-    const verified = await verifyAccessTokenWithAppStudio(accessToken);
-    const verifiedUser = { uid: verified.uid, username: verified.username };
-    const session: PiAuthSession = {
-      username: verifiedUser.username,
-      uid: verifiedUser.uid,
-      accessToken,
-      sessionToken: verified.sessionToken,
-      connectedAt: new Date().toISOString(),
-    };
-    saveStoredPiAuth(session);
-    broadcastTokenToAppStudio(accessToken, verifiedUser);
-    return session;
-  } catch {
-    return null;
-  }
+  return revalidateStoredPiAuth();
 }
 
 export async function logoutPi(): Promise<void> {
@@ -396,11 +452,13 @@ export async function logoutPi(): Promise<void> {
 export async function revalidateStoredPiAuth(): Promise<PiAuthSession | null> {
   const cached = getStoredPiAuth();
   if (!cached?.accessToken) return null;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch('/api/pi/auth', {
+    const res = await fetch(getPiAuthEndpoint(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
+      signal: controller.signal,
       body: JSON.stringify({ accessToken: cached.accessToken }),
     });
     if (res.status === 401 || res.status === 403) {
@@ -421,6 +479,8 @@ export async function revalidateStoredPiAuth(): Promise<PiAuthSession | null> {
     }
   } catch {
     // Preserve cached session if offline
+  } finally {
+    window.clearTimeout(timer);
   }
   return getStoredPiAuth();
 }

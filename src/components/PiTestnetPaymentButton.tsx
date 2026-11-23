@@ -37,20 +37,33 @@ export function PiTestnetPaymentButton({ compact = false, onPaymentSuccess }: Pi
   }, []);
 
   const handleConnectClick = async () => {
-    setState({ status: 'loading', label: 'Connecting Pi Account...' });
+    if (state.status === 'loading') return;
+    setState({ status: 'loading', label: 'Signing in...' });
+    let succeeded = false;
     try {
-      const session = await connectWithPi();
+      const session = await connectWithPi(['username']);
       setPiAuth(session);
+      succeeded = true;
       setState({ status: 'idle' });
     } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Unable to connect with Pi';
       setState({
         status: 'error',
-        message: err instanceof Error ? err.message : 'Unable to connect with Pi.',
+        message: `Sign-in failed: ${reason}. Tap to try again.`,
       });
+    } finally {
+      if (!succeeded) {
+        setState((prev) =>
+          prev.status === 'loading'
+            ? { status: 'error', message: 'Sign-in failed: Request ended unexpectedly. Tap to try again.' }
+            : prev
+        );
+      }
     }
   };
 
   const handlePayTestnet = async () => {
+    if (state.status === 'loading') return;
     setState({ status: 'loading', label: 'Processing Testnet Payment...' });
     try {
       const receipt = await runPiTestnetTestPayment((label) => {

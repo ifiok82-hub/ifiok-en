@@ -43,12 +43,14 @@ export function Navbar({
   };
 
   const handleConnectPiClick = async () => {
+    if (piConnecting) return;
     setPiError(null);
     setPiConnecting(true);
     try {
       await onConnectPi();
     } catch (err) {
-      setPiError(err instanceof Error ? err.message : 'Unable to connect with Pi.');
+      const reason = err instanceof Error ? err.message : 'Unable to connect with Pi';
+      setPiError(`Sign-in failed: ${reason}. Tap to try again.`);
     } finally {
       setPiConnecting(false);
     }

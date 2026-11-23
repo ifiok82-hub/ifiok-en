@@ -18,23 +18,33 @@ export function AuthModal({ isOpen, onClose, onAuthenticated }: AuthModalProps) 
   if (!isOpen) return null;
 
   const handlePiAuth = async () => {
+    if (loading) return;
     setError('');
     setLoading(true);
     try {
-      const session = await connectWithPi(['username', 'payments']);
-      const meRes = await fetch('/api/auth/me', { credentials: 'include' }).catch(() => null);
-      if (meRes && meRes.ok) {
-        const data = (await meRes.json().catch(() => ({}))) as { user?: UserProfile | null };
-        if (data.user) {
-          onAuthenticated(data.user);
-          onClose();
-          return;
+      const session = await connectWithPi(['username']);
+      const meController = new AbortController();
+      const meTimer = window.setTimeout(() => meController.abort(), 3000);
+      try {
+        const meRes = await fetch('/api/auth/me', {
+          credentials: 'include',
+          signal: meController.signal,
+        }).catch(() => null);
+        if (meRes && meRes.ok) {
+          const data = (await meRes.json().catch(() => ({}))) as { user?: UserProfile | null };
+          if (data.user) {
+            onAuthenticated(data.user);
+            onClose();
+            return;
+          }
         }
+      } finally {
+        window.clearTimeout(meTimer);
       }
       onAuthenticated({
         id: 0,
         email: null,
-        full_name: `@${session.username}`,
+        full_name: 'Pi Verified Testnet',
         account_type: 'member',
         country: 'Global',
         timezone: 'UTC',
@@ -53,7 +63,8 @@ export function AuthModal({ isOpen, onClose, onAuthenticated }: AuthModalProps) 
       });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Pi Network authentication failed.');
+      const reason = err instanceof Error ? err.message : 'Pi Network authentication failed';
+      setError(`Sign-in failed: ${reason}. Tap to try again.`);
     } finally {
       setLoading(false);
     }

@@ -1,9 +1,25 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 const PI_PLATFORM_ME_URL = 'https://api.minepi.com/v2/me';
+const ALLOWED_ORIGINS = new Set([
+  'https://ifiok-en.vercel.app',
+  'https://ifiokenu4714.pinet.com',
+]);
 
 type Req = IncomingMessage & { body?: Record<string, unknown> };
 type Res = ServerResponse;
+
+function applyCors(req: Req, res: Res) {
+  const origin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  if (ALLOWED_ORIGINS.has(origin) || origin.endsWith('.vercel.app') || origin.endsWith('.pinet.com')) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', 'https://ifiok-en.vercel.app');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
 
 async function readJsonBody(req: Req): Promise<Record<string, unknown>> {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -27,6 +43,14 @@ function sendJson(res: Res, statusCode: number, payload: unknown) {
 }
 
 export default async function handler(req: Req, res: Res) {
+  applyCors(req, res);
+
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
   if (req.method !== 'POST') {
     return sendJson(res, 405, { success: false, ok: false, error: 'Method Not Allowed' });
   }

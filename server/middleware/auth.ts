@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { db } from '../db.ts';
+import { exchangePiTokenWithAppStudio } from '../lib/piAppStudioAuth.ts';
 
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 export const COOKIE_NAME = 'ifiok_session';
@@ -130,28 +131,63 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   next();
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const token = extractToken(req);
-  if (!token) {
-    return res.status(401).json({ error: 'Authentication required. Please sign in.' });
-  }
+async function resolveUserFromPiTokenHeader(req: Request): Promise<AuthUser | null> {
+  const raw = req.headers['x-pi-access-token'];
+  const accessToken = typeof raw === 'string' ? raw.trim() : '';
+  if (!accessToken) return null;
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { uid: number; scope?: string };
-    if (payload.scope && payload.scope !== 'session') {
-      return res.status(401).json({ error: 'Multi-factor verification required to complete login.' });
+    const verified = await exchangePiTokenWithAppStudio(accessToken, 4000);
+    const piUser = verified.user;
+    const existing = db.prepare(`SELECT id, status FROM users WHERE pi_uid = ?`).get(piUser.uid) as
+      | { id: number; status: string }
+      | undefined;
+    if (existing) {
+      if (existing.status === 'suspended') return null;
+      return loadUserWithRoles(existing.id);
     }
-    const user = loadUserWithRoles(payload.uid);
-    if (!user) {
-      return res.status(401).json({ error: 'Session account no longer exists.' });
-    }
-    if (user.status === 'suspended') {
-      return res.status(403).json({ error: 'This account has been suspended. Contact support for review.' });
-    }
-    req.authUser = user;
-    return next();
+    const newUserId = db.transaction(() => {
+      const ins = db.prepare(`
+        INSERT INTO users (pi_uid, pi_username, full_name, account_type)
+        VALUES (?, ?, ?, 'member')
+      `).run(piUser.uid, piUser.username, piUser.username);
+      const id = Number(ins.lastInsertRowid);
+      assignRole(id, 'member', id);
+      return id;
+    })();
+    return loadUserWithRoles(newUserId);
   } catch {
-    return res.status(401).json({ error: 'Invalid or expired session. Please sign in again.' });
+    return null;
   }
+}
+
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const token = extractToken(req);
+  if (token) {
+    try {
+      const payload = jwt.verify(token, JWT_SECRET) as { uid: number; scope?: string };
+      if (payload.scope && payload.scope !== 'session') {
+        return res.status(401).json({ error: 'Multi-factor verification required to complete login.' });
+      }
+      const user = loadUserWithRoles(payload.uid);
+      if (user) {
+        if (user.status === 'suspended') {
+          return res.status(403).json({ error: 'This account has been suspended. Contact support for review.' });
+        }
+        req.authUser = user;
+        return next();
+      }
+    } catch {
+      // Fall through to Pi access token header fallback if present
+    }
+  }
+
+  const piUser = await resolveUserFromPiTokenHeader(req);
+  if (piUser) {
+    req.authUser = piUser;
+    return next();
+  }
+
+  return res.status(401).json({ error: 'Authentication required. Please sign in.' });
 }
 
 export function csrfOriginGuard(req: Request, res: Response, next: NextFunction) {

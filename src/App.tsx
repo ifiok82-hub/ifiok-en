@@ -120,6 +120,23 @@ function parseRouteFromLocation(): { view: AppView; division: DivisionTab; acade
   return { view: 'home', division: 'academy', academySubView: 'courses' };
 }
 
+function buildUserFromPiSession(session: PiAuthSession): UserProfile {
+  return {
+    id: 0,
+    email: null,
+    pi_uid: session.uid,
+    pi_username: session.username,
+    full_name: `@${session.username}`,
+    country: 'Global',
+    timezone: 'UTC',
+    preferred_currency: 'PI',
+    preferred_language: 'en',
+    account_type: 'individual',
+    status: 'active',
+    roles: session.username.replace(/^@/, '').toLowerCase() === 'ifiok1967' ? ['super_admin', 'member'] : ['member'],
+  };
+}
+
 export default function App() {
   const initialRoute = parseRouteFromLocation();
   const [adminUnlocked, setAdminUnlocked] = useState<boolean>(() => {
@@ -135,8 +152,11 @@ export default function App() {
   );
   const [divisionTab, setDivisionTab] = useState<DivisionTab>(initialRoute.division);
   const [academySubView, setAcademySubView] = useState<AcademySubView>(initialRoute.academySubView);
-  const [user, setUser] = useState<UserProfile | null>(null);
   const [piAuth, setPiAuth] = useState<PiAuthSession | null>(() => getStoredPiAuth());
+  const [user, setUser] = useState<UserProfile | null>(() => {
+    const stored = getStoredPiAuth();
+    return stored ? buildUserFromPiSession(stored) : null;
+  });
   const [summary, setSummary] = useState<PublicSummary>(() => buildSeedPublicSummary());
   const [loadingSummary, setLoadingSummary] = useState(true);
 
@@ -331,7 +351,8 @@ export default function App() {
       const res = await apiRequest<{ user: UserProfile | null }>('/api/auth/me');
       const authUser = res?.user;
       if (!authUser) {
-        setUser(null);
+        const storedPi = getStoredPiAuth();
+        setUser(storedPi ? buildUserFromPiSession(storedPi) : null);
         return;
       }
       setUser(authUser);
@@ -348,7 +369,8 @@ export default function App() {
         setView('admin');
       }
     } catch {
-      setUser(null);
+      const storedPi = getStoredPiAuth();
+      setUser(storedPi ? buildUserFromPiSession(storedPi) : null);
     }
   }, [adminUnlocked]);
 
@@ -369,13 +391,25 @@ export default function App() {
         void autoAuthenticatePi().then((session) => {
           if (session) {
             setPiAuth(session);
+            setUser((prev) => prev ?? buildUserFromPiSession(session));
             void loadSession();
           }
         });
       }
     });
-    void revalidateStoredPiAuth().then((valid) => setPiAuth(valid));
-    const syncPi = () => setPiAuth(getStoredPiAuth());
+    void revalidateStoredPiAuth().then((valid) => {
+      setPiAuth(valid);
+      if (valid) {
+        setUser((prev) => prev ?? buildUserFromPiSession(valid));
+      }
+    });
+    const syncPi = () => {
+      const latest = getStoredPiAuth();
+      setPiAuth(latest);
+      if (latest) {
+        setUser((prev) => prev ?? buildUserFromPiSession(latest));
+      }
+    };
     window.addEventListener(PI_AUTH_EVENT, syncPi);
     window.addEventListener('storage', syncPi);
     return () => {
@@ -446,6 +480,7 @@ export default function App() {
           onConnectPi={async () => {
             const session = await connectWithPi();
             setPiAuth(session);
+            setUser((prev) => prev ?? buildUserFromPiSession(session));
             void loadSession();
           }}
           onLogoutPi={async () => {
@@ -476,6 +511,7 @@ export default function App() {
           onConnectPi={async () => {
             const session = await connectWithPi();
             setPiAuth(session);
+            setUser((prev) => prev ?? buildUserFromPiSession(session));
             void loadSession();
           }}
           onLogoutPi={async () => {

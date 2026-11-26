@@ -23,6 +23,7 @@ import certFolioImg from '../assets/images/ifiok_academy_folio_1794728475006.jpg
 import professorImg from '../assets/images/ifiok_professor_studio_1794728460558.jpg';
 import commerceCourseImg from '../assets/images/market_digital_commerce_1794641803851.jpg';
 import { apiRequest } from '../lib/api.ts';
+import { getUnlockToken } from '../lib/pi.ts';
 
 function getCourseCoverImage(course: Course): string {
   if (course.image_url) return course.image_url;
@@ -81,6 +82,7 @@ interface GlobalAcademyHubProps {
   initialSubView?: AcademySubView;
   onRequireAuth: () => void;
   onEnrolCourse: (course: Course) => void;
+  payingCourseId?: number | null;
   onAccessUnlockedCourse: (courseId: number) => void;
   onOpenCreateCourse: () => void;
   onNotify: (type: 'ok' | 'err', text: string) => void;
@@ -100,6 +102,7 @@ export function GlobalAcademyHub({
   initialSubView = 'courses',
   onRequireAuth,
   onEnrolCourse,
+  payingCourseId = null,
   onAccessUnlockedCourse,
   onOpenCreateCourse,
   onNotify,
@@ -206,10 +209,16 @@ export function GlobalAcademyHub({
 
   const handleDownloadCourseFile = async (courseId: number, storageKey: string) => {
     try {
+      const unlockToken = getUnlockToken('course', courseId);
+      const headers: Record<string, string> = {};
+      if (unlockToken) {
+        headers['x-ifiok-unlock-token'] = unlockToken;
+      }
       const res = await apiRequest<{ downloadUrl: string; fileName: string }>(
         `/api/payments/entitlements/course/${courseId}/download-token`,
         {
           method: 'POST',
+          headers,
           body: JSON.stringify({ fileKey: storageKey }),
         }
       );
@@ -529,10 +538,17 @@ export function GlobalAcademyHub({
                         </button>
                         <button
                           type="button"
+                          disabled={payingCourseId === c.id}
                           onClick={() => onEnrolCourse(c)}
-                          className="px-3.5 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer whitespace-nowrap"
+                          className="px-3.5 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer whitespace-nowrap disabled:opacity-50"
                         >
-                          {c.price_pi === 0 ? 'Enrol Free' : 'PAY WITH PI'}
+                          {payingCourseId === c.id
+                            ? c.price_pi === 0
+                              ? 'Enrolling...'
+                              : 'Processing Pi...'
+                            : c.price_pi === 0
+                              ? 'Enrol Free'
+                              : 'PAY WITH PI'}
                         </button>
                       </div>
                     </div>
@@ -825,10 +841,13 @@ export function GlobalAcademyHub({
                       </p>
                       <button
                         type="button"
+                        disabled={payingCourseId === classroom.course.id}
                         onClick={() => onEnrolCourse(classroom.course)}
-                        className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                        className="px-4 py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-50"
                       >
-                        PAY WITH PI ({classroom.course.price_pi} π)
+                        {payingCourseId === classroom.course.id
+                          ? 'Processing Pi...'
+                          : `PAY WITH PI (${classroom.course.price_pi} π)`}
                       </button>
                     </div>
                   )}

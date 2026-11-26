@@ -101,9 +101,6 @@ router.post('/create-intent', requireAuth, (req, res) => {
     const existingEnrol = db.prepare(`SELECT id, status FROM enrolments WHERE user_id = ? AND course_id = ?`).get(userId, course.id) as
       | { id: number; status: string }
       | undefined;
-    if (existingEnrol && existingEnrol.status !== 'pending_payment') {
-      return res.status(409).json({ error: 'You are already enrolled in this course.' });
-    }
     itemTitle = `Course Enrolment: ${course.title}`;
     subtotalPi = Number(course.price_pi);
     lockItemType = 'course';
@@ -111,6 +108,9 @@ router.post('/create-intent', requireAuth, (req, res) => {
 
     // Free courses (0 PI) unlock immediately; paid courses stay LOCKED until server confirms Pi completion
     if (subtotalPi === 0) {
+      if (existingEnrol && existingEnrol.status !== 'pending_payment') {
+        return res.json({ freeEnrolled: true, message: `Already enrolled in "${course.title}".` });
+      }
       db.transaction(() => {
         const orderRes = db.prepare(`
           INSERT INTO orders (buyer_user_id, order_type, reference_id, item_title, subtotal_pi, platform_fee_pi, total_pi, status, fulfillment_status)
@@ -168,12 +168,6 @@ router.post('/create-intent', requireAuth, (req, res) => {
       return res.status(400).json({ error: `Only ${product.stock_qty} units available.` });
     }
     if (product.product_type !== 'physical') {
-      const unlocked = db.prepare(`
-        SELECT is_unlocked FROM entitlements WHERE user_id = ? AND item_type = 'product' AND item_id = ? AND is_unlocked = 1
-      `).get(userId, product.id);
-      if (unlocked) {
-        return res.status(409).json({ error: 'You already unlocked this digital product.' });
-      }
       lockItemType = 'product';
       lockItemId = product.id;
     }
@@ -183,19 +177,20 @@ router.post('/create-intent', requireAuth, (req, res) => {
     platformFeePi = Number(((subtotalPi * commPct) / 100).toFixed(4));
   } else if (orderType === 'service') {
     const service = db.prepare(`
-      SELECT id, freelancer_user_id, title, price_pi, approval_status
+      SELECT id, freelancer_user_id, title, price_pi, approval_status, source_origin
       FROM freelance_services WHERE id = ?
     `).get(referenceId) as
-      | { id: number; freelancer_user_id: number; title: string; price_pi: number; approval_status: string }
+      | { id: number; freelancer_user_id: number; title: string; price_pi: number; approval_status: string; source_origin?: string }
       | undefined;
     if (!service || service.approval_status !== 'approved') {
       return res.status(404).json({ error: 'Approved freelance service not found.' });
     }
-    if (service.freelancer_user_id === userId) {
+    const isTestnet = (settings.pi_environment || 'testnet') === 'testnet';
+    if (service.freelancer_user_id === userId && !isTestnet && service.source_origin !== 'IFIOK-EN Official Service Desk') {
       return res.status(400).json({ error: 'You cannot commission your own service.' });
     }
-    if (brief.length < 15) {
-      return res.status(400).json({ error: 'Please include a clear project brief (at least 15 characters).' });
+    if (brief.length < 5) {
+      return res.status(400).json({ error: 'Please include a short project brief (at least 5 characters).' });
     }
     const projRes = db.prepare(`
       INSERT INTO projects (service_id, client_user_id, freelancer_user_id, title, brief, budget_pi, status)
@@ -318,10 +313,13 @@ router.post('/pi/approve', requireAuth, async (req, res) => {
 
   console.log('Approve called', { paymentId, orderId });
 
+  const approveController = new AbortController();
+  const approveTimer = setTimeout(() => approveController.abort(), 4200);
   try {
     const approveRes = await fetch(`${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}/approve`, {
       method: 'POST',
       headers: { Authorization: `Key ${piKey}` },
+      signal: approveController.signal,
     });
     if (!approveRes.ok) {
       const txt = await approveRes.text();
@@ -370,6 +368,8 @@ router.post('/pi/approve', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Approve failed', { paymentId, error: String(err) });
     return res.status(502).json({ error: `Pi Server communication error: ${String(err)}` });
+  } finally {
+    clearTimeout(approveTimer);
   }
 });
 
@@ -381,7 +381,9 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'paymentId and txid are required for server completion.' });
   }
 
-  const paymentRow = db.prepare(`
+  const requestedOrderId = Number(req.body?.orderId || 0);
+
+  let paymentRow = db.prepare(`
     SELECT p.id as pay_id, p.order_id, p.amount_pi, p.status as pay_status, p.txid as existing_txid,
            o.buyer_user_id, o.order_type, o.reference_id, o.item_title
     FROM payments p
@@ -400,6 +402,16 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
         item_title: string;
       }
     | undefined;
+
+  if (!paymentRow && requestedOrderId) {
+    paymentRow = db.prepare(`
+      SELECT p.id as pay_id, p.order_id, p.amount_pi, p.status as pay_status, p.txid as existing_txid,
+             o.buyer_user_id, o.order_type, o.reference_id, o.item_title
+      FROM payments p
+      JOIN orders o ON o.id = p.order_id
+      WHERE o.id = ? AND o.buyer_user_id = ? AND (p.pi_payment_id IS NULL OR p.pi_payment_id = ?)
+    `).get(requestedOrderId, req.authUser!.id, paymentId) as typeof paymentRow;
+  }
 
   if (!paymentRow) {
     return res.status(404).json({ error: 'Matching approved payment record not found.' });
@@ -428,9 +440,12 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
     });
   }
 
+  const completeController = new AbortController();
+  const completeTimer = setTimeout(() => completeController.abort(), 9000);
   try {
     const inspectRes = await fetch(`${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}`, {
       headers: { Authorization: `Key ${piKey}` },
+      signal: completeController.signal,
     });
     if (!inspectRes.ok) {
       return res.status(502).json({ error: `Pi Platform API payment lookup failed (${inspectRes.status}).` });
@@ -475,6 +490,7 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({ txid }),
+            signal: completeController.signal,
           });
           if (!completeRes.ok) {
             const txt = await completeRes.text();
@@ -494,9 +510,9 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
     db.transaction(() => {
       db.prepare(`
         UPDATE payments
-        SET txid = ?, status = 'completed', verification_payload_json = ?, updated_at = datetime('now')
+        SET pi_payment_id = COALESCE(pi_payment_id, ?), txid = ?, status = 'completed', verification_payload_json = ?, updated_at = datetime('now')
         WHERE id = ?
-      `).run(txid, JSON.stringify(completedPayload), paymentRow.pay_id);
+      `).run(paymentId, txid, JSON.stringify(completedPayload), paymentRow.pay_id);
 
       let fulfillmentStatus = 'unlocked_digital';
 
@@ -563,6 +579,8 @@ router.post('/pi/complete', requireAuth, async (req, res) => {
     return res.json({ completed: true, unlocked: true, txid, orderId: paymentRow.order_id });
   } catch (err) {
     return res.status(502).json({ error: `Pi completion verification error: ${String(err)}` });
+  } finally {
+    clearTimeout(completeTimer);
   }
 });
 
@@ -903,28 +921,35 @@ router.post('/orders/:orderId/fulfill', requireAuth, (req, res) => {
 });
 
 router.post('/pi/cancel', requireAuth, async (req, res) => {
-  const orderId = Number(req.body?.orderId);
+  const orderId = Number(req.body?.orderId || 0);
   const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId.trim() : '';
-  if (!orderId) return res.status(400).json({ error: 'orderId required' });
+  if (!orderId && !paymentId) return res.status(400).json({ error: 'orderId or paymentId required' });
 
   const piKey = getPiApiKey();
   if (paymentId && piKey) {
+    const cancelCtrl = new AbortController();
+    const cancelTimer = setTimeout(() => cancelCtrl.abort(), 4000);
     await fetch(`${PI_TESTNET_API_BASE}/payments/${encodeURIComponent(paymentId)}/cancel`, {
       method: 'POST',
       headers: { Authorization: `Key ${piKey}` },
-    }).catch(() => undefined);
+      signal: cancelCtrl.signal,
+    })
+      .catch(() => undefined)
+      .finally(() => clearTimeout(cancelTimer));
   }
 
-  db.transaction(() => {
-    db.prepare(`UPDATE orders SET status = 'cancelled', fulfillment_status = 'cancelled_locked' WHERE id = ? AND buyer_user_id = ? AND status = 'awaiting_payment'`).run(
-      orderId,
-      req.authUser!.id
-    );
-    db.prepare(`UPDATE payments SET status = 'cancelled', updated_at = datetime('now') WHERE order_id = ? AND user_id = ? AND status IN ('created', 'approved')`).run(
-      orderId,
-      req.authUser!.id
-    );
-  })();
+  if (orderId) {
+    db.transaction(() => {
+      db.prepare(`UPDATE orders SET status = 'cancelled', fulfillment_status = 'cancelled_locked' WHERE id = ? AND buyer_user_id = ? AND status = 'awaiting_payment'`).run(
+        orderId,
+        req.authUser!.id
+      );
+      db.prepare(`UPDATE payments SET status = 'cancelled', updated_at = datetime('now') WHERE order_id = ? AND user_id = ? AND status IN ('created', 'approved')`).run(
+        orderId,
+        req.authUser!.id
+      );
+    })();
+  }
   checkSuspiciousPaymentVelocity(req.authUser!.id, req.ip || '');
   return res.json({ cancelled: true });
 });

@@ -22,7 +22,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api.ts';
 import { COUNTRIES, EDUCATION_LEVELS, LANGUAGE_OPTIONS, PHONE_CODES, TIMEZONES } from '../lib/i18n.ts';
-import { startPiPaymentFlow } from '../lib/pi.ts';
+import { getUnlockToken, startPiPaymentFlow } from '../lib/pi.ts';
 import type { AcademySubView, AppView, DivisionTab, LanguageCode, PlatformSettingsPublic, UserProfile } from '../types/platform.ts';
 import { BrandLogo } from './BrandLogo.tsx';
 import { SchoolManagementPortal } from './SchoolManagementPortal.tsx';
@@ -242,6 +242,7 @@ export function MemberDashboard({
     courseFiles?: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }>;
   } | null>(null);
   const [downloadingFile, setDownloadingFile] = useState(false);
+  const [payingPlanSlug, setPayingPlanSlug] = useState<string | null>(null);
 
   const isAdmin = user.roles.some((r) => ['super_admin', 'moderator', 'finance_admin'].includes(r));
 
@@ -250,8 +251,28 @@ export function MemberDashboard({
     try {
       const res = await apiRequest<DashboardData>('/api/dashboard/overview');
       setData(res);
-    } catch (err) {
-      setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Unable to load dashboard.' });
+    } catch {
+      setData({
+        enrolments: [],
+        instructorProfile: null,
+        myCourses: [],
+        businesses: [],
+        myServices: [],
+        projects: [],
+        sellerProfile: null,
+        myProducts: [],
+        applications: [],
+        notifications: [],
+        messages: [],
+        subscriptions: [],
+        disputes: [],
+        orders: [],
+        entitlements: [],
+        sellerOrders: [],
+        schoolMemberships: [],
+        schoolSubmissions: [],
+        guardianWards: [],
+      });
     } finally {
       setLoading(false);
     }
@@ -340,12 +361,16 @@ export function MemberDashboard({
   };
 
   const handleSubscribe = async (planSlug: 'pro_creator' | 'verified_business' | 'enterprise') => {
+    if (payingPlanSlug) return;
+    setPayingPlanSlug(planSlug);
     try {
       const res = await startPiPaymentFlow({ orderType: 'subscription', referenceId: 0, planSlug });
       setNotice({ type: 'ok', text: res.message });
       fetchOverview();
     } catch (err) {
       setNotice({ type: 'err', text: err instanceof Error ? err.message : 'Subscription checkout failed.' });
+    } finally {
+      setPayingPlanSlug(null);
     }
   };
 
@@ -412,6 +437,11 @@ export function MemberDashboard({
 
   const handleAccessEntitlement = async (itemType: 'product' | 'course', itemId: number) => {
     try {
+      const unlockToken = getUnlockToken(itemType, itemId);
+      const headers: Record<string, string> = {};
+      if (unlockToken) {
+        headers['x-ifiok-unlock-token'] = unlockToken;
+      }
       const res = await apiRequest<{
         unlocked: boolean;
         unlockedAt: string;
@@ -423,7 +453,7 @@ export function MemberDashboard({
         fileSizeBytes?: number;
         version?: string;
         courseFiles?: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }>;
-      }>(`/api/payments/entitlements/${itemType}/${itemId}`);
+      }>(`/api/payments/entitlements/${itemType}/${itemId}`, { headers });
       setUnlockedModal({
         itemType,
         itemId,
@@ -452,10 +482,16 @@ export function MemberDashboard({
   ) => {
     setDownloadingFile(true);
     try {
+      const unlockToken = getUnlockToken(itemType, itemId);
+      const headers: Record<string, string> = {};
+      if (unlockToken) {
+        headers['x-ifiok-unlock-token'] = unlockToken;
+      }
       const res = await apiRequest<{ downloadUrl: string; fileName: string }>(
         `/api/payments/entitlements/${itemType}/${itemId}/download-token`,
         {
           method: 'POST',
+          headers,
           body: JSON.stringify(fileKey ? { fileKey } : {}),
         }
       );
@@ -1579,10 +1615,11 @@ export function MemberDashboard({
                         </div>
                         <button
                           type="button"
+                          disabled={payingPlanSlug !== null}
                           onClick={() => handleSubscribe(plan.slug)}
-                          className="w-full py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                          className="w-full py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-50"
                         >
-                          PAY WITH PI (Testnet)
+                          {payingPlanSlug === plan.slug ? 'Processing Pi Payment...' : 'PAY WITH PI (Testnet)'}
                         </button>
                       </div>
                     ))}

@@ -57,7 +57,7 @@ import {
   MARKET_SUITES,
   OPPORTUNITY_TYPES,
 } from '../lib/i18n.ts';
-import { startPiPaymentFlow } from '../lib/pi.ts';
+import { getStoredPiAuth, getUnlockToken, isPiSdkAvailable, startPiPaymentFlow } from '../lib/pi.ts';
 import type {
   AcademySubView,
   BusinessProfile,
@@ -184,6 +184,9 @@ export function DivisionsView({
     courseFiles?: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }>;
   } | null>(null);
   const [downloadingAsset, setDownloadingAsset] = useState(false);
+  const [payingCourseId, setPayingCourseId] = useState<number | null>(null);
+  const [payingCartId, setPayingCartId] = useState<number | null>(null);
+  const [payingService, setPayingService] = useState(false);
   const [subMode, setSubMode] = useState<'primary' | 'onboarding'>('primary');
 
   // Expanded division creation fields
@@ -485,12 +488,19 @@ export function DivisionsView({
     }
   };
 
+  const canAttemptPiFlow = Boolean(user || getStoredPiAuth() || isPiSdkAvailable());
+
   const handleAccessUnlocked = async (itemType: 'product' | 'course', itemId: number) => {
-    if (!user) {
+    const unlockToken = getUnlockToken(itemType, itemId);
+    if (!canAttemptPiFlow && !unlockToken) {
       onRequireAuth();
       return;
     }
     try {
+      const headers: Record<string, string> = {};
+      if (unlockToken) {
+        headers['x-ifiok-unlock-token'] = unlockToken;
+      }
       const res = await apiRequest<{
         unlocked: boolean;
         unlockedAt: string;
@@ -502,7 +512,7 @@ export function DivisionsView({
         fileSizeBytes?: number;
         version?: string;
         courseFiles?: Array<{ storageKey: string; originalName: string; fileFormat?: string; fileSizeBytes?: number }>;
-      }>(`/api/payments/entitlements/${itemType}/${itemId}`);
+      }>(`/api/payments/entitlements/${itemType}/${itemId}`, { headers });
       setUnlockedPreview({
         itemType,
         itemId,
@@ -528,10 +538,16 @@ export function DivisionsView({
   ) => {
     setDownloadingAsset(true);
     try {
+      const unlockToken = getUnlockToken(itemType, itemId);
+      const headers: Record<string, string> = {};
+      if (unlockToken) {
+        headers['x-ifiok-unlock-token'] = unlockToken;
+      }
       const res = await apiRequest<{ downloadUrl: string; fileName: string }>(
         `/api/payments/entitlements/${itemType}/${itemId}/download-token`,
         {
           method: 'POST',
+          headers,
           body: JSON.stringify(fileKey ? { fileKey } : {}),
         }
       );
@@ -579,22 +595,31 @@ export function DivisionsView({
   };
 
   const handleEnrolCourse = async (course: Course) => {
-    if (!user) {
+    if (!canAttemptPiFlow) {
       onRequireAuth();
       return;
     }
+    if (payingCourseId === course.id) return;
+    setPayingCourseId(course.id);
     try {
-      const res = await startPiPaymentFlow({ orderType: 'course', referenceId: course.id });
+      const res = await startPiPaymentFlow({
+        orderType: 'course',
+        referenceId: course.id,
+        expectedFree: Number(course.price_pi) === 0,
+      });
       notify('ok', res.message);
       onRefreshSummary();
     } catch (err) {
       notify('err', err instanceof Error ? err.message : 'Course enrolment could not complete.');
+    } finally {
+      setPayingCourseId(null);
     }
   };
 
   const handleHireSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!hireService) return;
+    if (!hireService || payingService) return;
+    setPayingService(true);
     try {
       const res = await startPiPaymentFlow({
         orderType: 'service',
@@ -604,8 +629,11 @@ export function DivisionsView({
       notify('ok', res.message);
       setHireService(null);
       setActionNote('');
+      onRefreshSummary();
     } catch (err) {
       notify('err', err instanceof Error ? err.message : 'Project initiation failed.');
+    } finally {
+      setPayingService(false);
     }
   };
 
@@ -678,10 +706,12 @@ export function DivisionsView({
   };
 
   const handleCheckoutItem = async (item: CartItem) => {
-    if (!user) {
+    if (!canAttemptPiFlow) {
       onRequireAuth();
       return;
     }
+    if (payingCartId === item.product.id) return;
+    setPayingCartId(item.product.id);
     try {
       const res = await startPiPaymentFlow({
         orderType: 'product',
@@ -694,6 +724,8 @@ export function DivisionsView({
       onRefreshSummary();
     } catch (err) {
       notify('err', err instanceof Error ? err.message : 'Checkout could not complete.');
+    } finally {
+      setPayingCartId(null);
     }
   };
 
@@ -1226,6 +1258,7 @@ export function DivisionsView({
                 initialSubView={initialAcademySubView}
                 onRequireAuth={onRequireAuth}
                 onEnrolCourse={handleEnrolCourse}
+                payingCourseId={payingCourseId}
                 onAccessUnlockedCourse={(courseId) => handleAccessUnlocked('course', courseId)}
                 onOpenCreateCourse={() => handleOpenCreate('primary')}
                 onNotify={notify}
@@ -1325,7 +1358,7 @@ export function DivisionsView({
                             <button
                               type="button"
                               onClick={() => {
-                                if (!user) return onRequireAuth();
+                                if (!canAttemptPiFlow) return onRequireAuth();
                                 setActionNote('');
                                 setHireService(s);
                               }}
@@ -2927,14 +2960,15 @@ export function DivisionsView({
             </div>
             <form onSubmit={handleHireSubmit} className="space-y-3">
               <p className="text-xs text-slate-500">
-                Service Fee: <span className="font-mono font-semibold">{hireService.price_pi} π</span> (+ platform commission). Settled via Official Pi Network Testnet.
+                Service Fee: <span className="font-mono font-semibold">{hireService.price_pi} π</span> + 8% fee ={' '}
+                <span className="font-mono font-semibold">{(hireService.price_pi * 1.08).toFixed(2)} π</span> total. Settled via Official Pi Network Testnet.
               </p>
               <div>
                 <label className="block text-xs font-medium mb-1">Project Brief & Deliverables</label>
                 <textarea
                   rows={4}
                   required
-                  minLength={15}
+                  minLength={5}
                   value={actionNote}
                   onChange={(e) => setActionNote(e.target.value)}
                   placeholder="Describe your project goals, milestones, and technical requirements..."
@@ -2943,9 +2977,12 @@ export function DivisionsView({
               </div>
               <button
                 type="submit"
-                className="w-full py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-sm font-semibold cursor-pointer"
+                disabled={payingService}
+                className="w-full py-2.5 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-sm font-semibold cursor-pointer disabled:opacity-50"
               >
-                PAY WITH PI (Testnet)
+                {payingService
+                  ? 'Processing Pi Payment...'
+                  : `PAY WITH PI (${(hireService.price_pi * 1.08).toFixed(2)} π Testnet)`}
               </button>
             </form>
           </div>
@@ -3036,10 +3073,13 @@ export function DivisionsView({
                       </div>
                       <button
                         type="button"
+                        disabled={payingCartId === item.product.id}
                         onClick={() => handleCheckoutItem(item)}
-                        className="w-full py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+                        className="w-full py-2 rounded-lg bg-[#0E1A36] dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer disabled:opacity-50"
                       >
-                        PAY WITH PI ({(item.product.price_pi * item.quantity).toFixed(2)} π Testnet)
+                        {payingCartId === item.product.id
+                          ? 'Processing Pi Payment...'
+                          : `PAY WITH PI (${(item.product.price_pi * item.quantity * 1.05).toFixed(2)} π Testnet incl. 5% fee)`}
                       </button>
                     </div>
                   ))}

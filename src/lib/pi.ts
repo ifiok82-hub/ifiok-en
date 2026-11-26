@@ -64,6 +64,7 @@ declare global {
 
 const PI_AUTH_STORAGE_KEY = 'pi_auth';
 const LEGACY_PI_AUTH_STORAGE_KEY = 'ifiok_pi_auth';
+const UNLOCK_TOKENS_STORAGE_KEY = 'ifiok_unlock_tokens';
 export const PI_AUTH_EVENT = 'ifiok-pi-auth-changed';
 
 let initialized = false;
@@ -220,6 +221,55 @@ export async function waitForPiSdk(timeoutMs = 3500): Promise<boolean> {
   return false;
 }
 
+function buildUnlockKey(itemType: string, itemId: number | string, planSlug?: string): string {
+  return planSlug ? `${itemType}:${itemId}:${planSlug}` : `${itemType}:${itemId}`;
+}
+
+export function saveUnlockToken(
+  itemType: 'course' | 'product' | 'service' | 'subscription',
+  itemId: number,
+  token: string | null | undefined,
+  planSlug?: string
+) {
+  if (typeof window === 'undefined' || !token) return;
+  try {
+    const raw = window.localStorage.getItem(UNLOCK_TOKENS_STORAGE_KEY);
+    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    map[buildUnlockKey(itemType, itemId, planSlug)] = token;
+    window.localStorage.setItem(UNLOCK_TOKENS_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage restrictions
+  }
+}
+
+export function getUnlockToken(
+  itemType: 'course' | 'product' | 'service' | 'subscription',
+  itemId: number,
+  planSlug?: string
+): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(UNLOCK_TOKENS_STORAGE_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, string>;
+    return map[buildUnlockKey(itemType, itemId, planSlug)] || null;
+  } catch {
+    return null;
+  }
+}
+
+export function getPiAuthHeaders(): Record<string, string> {
+  const session = runtimePiAuth || getStoredPiAuth();
+  const headers: Record<string, string> = {};
+  if (session?.sessionToken) {
+    headers.Authorization = `Bearer ${session.sessionToken}`;
+  }
+  if (session?.accessToken) {
+    headers['x-pi-access-token'] = session.accessToken;
+  }
+  return headers;
+}
+
 // Unified handler for any incomplete Pi payment discovered during authenticate():
 // Complete if transaction.txid exists, else cancel so stuck prior payments never block new payments.
 export async function handleIncompletePaymentFound(incomplete: PiIncompletePayment): Promise<void> {
@@ -227,27 +277,44 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
   if (!paymentId) return;
 
   const orderId = incomplete.metadata?.orderId ? Number(incomplete.metadata.orderId) : null;
+  const orderType = typeof incomplete.metadata?.orderType === 'string' ? incomplete.metadata.orderType : undefined;
+  const referenceId = incomplete.metadata?.referenceId ? Number(incomplete.metadata.referenceId) : undefined;
+  const planSlug = typeof incomplete.metadata?.planSlug === 'string' ? incomplete.metadata.planSlug : undefined;
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 5000);
+  const headers = { 'Content-Type': 'application/json', ...getPiAuthHeaders() };
 
   try {
     if (incomplete.transaction?.txid) {
       const txid = incomplete.transaction.txid;
       const res = await fetch(orderId ? '/api/payments/pi/complete' : '/api/pi/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         credentials: 'include',
         signal: controller.signal,
         body: JSON.stringify({
           paymentId,
           txid,
           ...(orderId ? { orderId } : {}),
+          ...(orderType ? { orderType } : {}),
+          ...(referenceId ? { referenceId } : {}),
+          ...(planSlug ? { planSlug } : {}),
         }),
       });
-      if (!res.ok && orderId) {
+      if (res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { unlockToken?: string };
+        if (data.unlockToken && orderType && ['course', 'product', 'service', 'subscription'].includes(orderType)) {
+          saveUnlockToken(
+            orderType as 'course' | 'product' | 'service' | 'subscription',
+            referenceId || 0,
+            data.unlockToken,
+            planSlug
+          );
+        }
+      } else if (orderId) {
         await fetch('/api/pi/complete', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           credentials: 'include',
           signal: controller.signal,
           body: JSON.stringify({ paymentId, txid }),
@@ -258,7 +325,7 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
 
     const cancelRes = await fetch(orderId ? '/api/payments/pi/cancel' : '/api/pi/cancel', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       credentials: 'include',
       signal: controller.signal,
       body: JSON.stringify({
@@ -269,7 +336,7 @@ export async function handleIncompletePaymentFound(incomplete: PiIncompletePayme
     if (!cancelRes.ok && orderId) {
       await fetch('/api/pi/cancel', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         credentials: 'include',
         signal: controller.signal,
         body: JSON.stringify({ paymentId }),
@@ -530,10 +597,10 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
   }
 
   const verifiedUsername = session.username;
-  const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (session.sessionToken) {
-    authHeaders.Authorization = `Bearer ${session.sessionToken}`;
-  }
+  const authHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...getPiAuthHeaders(),
+  };
 
   onStatusUpdate?.('Processing Testnet Payment...');
 
@@ -562,11 +629,14 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
         {
           onReadyForServerApproval: async (paymentId: string) => {
             onStatusUpdate?.('Approving on IFIOK-EN server...');
+            const controller = new AbortController();
+            const timer = window.setTimeout(() => controller.abort(), 4800);
             try {
               const res = await fetch('/api/pi/approve', {
                 method: 'POST',
                 headers: authHeaders,
                 credentials: 'include',
+                signal: controller.signal,
                 body: JSON.stringify({ paymentId }),
               });
               const data = (await res.json().catch(() => ({}))) as {
@@ -579,15 +649,20 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
               }
             } catch (err) {
               safeReject(err instanceof Error ? err : new Error(String(err)));
+            } finally {
+              window.clearTimeout(timer);
             }
           },
           onReadyForServerCompletion: async (paymentId: string, txid: string) => {
             onStatusUpdate?.('Completing Testnet Payment...');
+            const controller = new AbortController();
+            const timer = window.setTimeout(() => controller.abort(), 10000);
             try {
               const res = await fetch('/api/pi/complete', {
                 method: 'POST',
                 headers: authHeaders,
                 credentials: 'include',
+                signal: controller.signal,
                 body: JSON.stringify({ paymentId, txid }),
               });
               const data = (await res.json().catch(() => ({}))) as {
@@ -611,15 +686,22 @@ export async function runPiTestnetTestPayment(onStatusUpdate?: (msg: string) => 
               });
             } catch (err) {
               safeReject(err instanceof Error ? err : new Error(String(err)));
+            } finally {
+              window.clearTimeout(timer);
             }
           },
           onCancel: (paymentId: string) => {
+            const controller = new AbortController();
+            const timer = window.setTimeout(() => controller.abort(), 4500);
             fetch('/api/pi/cancel', {
               method: 'POST',
               headers: authHeaders,
               credentials: 'include',
+              signal: controller.signal,
               body: JSON.stringify({ paymentId }),
-            }).catch(() => undefined);
+            })
+              .catch(() => undefined)
+              .finally(() => window.clearTimeout(timer));
             safeReject(new PiPaymentCancelledError(paymentId, 'Cancelled'));
           },
           onError: (error: Error, payment?: unknown) => {
@@ -641,6 +723,7 @@ export interface PaymentIntentPayload {
   brief?: string;
   planSlug?: string;
   shippingInfo?: Record<string, string>;
+  expectedFree?: boolean;
 }
 
 export interface PaymentFlowResult {
@@ -648,6 +731,7 @@ export interface PaymentFlowResult {
   message: string;
   txid?: string;
   orderId?: number;
+  unlockToken?: string;
 }
 
 function makeIdempotencyKey(): string {
@@ -657,35 +741,71 @@ function makeIdempotencyKey(): string {
   return `pi-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+async function fetchJsonWithTimeout<T>(url: string, body: unknown, timeoutMs: number): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await apiRequest<T>(url, {
+      method: 'POST',
+      signal: controller.signal,
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Request timed out communicating with IFIOK-EN server.');
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise<PaymentFlowResult> {
+  if (!payload.expectedFree && isPiSdkAvailable() && (!runtimePiAuth || !paymentScopeAuthorized)) {
+    await connectWithPi(['username', 'payments']);
+  }
+
   const idempotencyKey = makeIdempotencyKey();
-  const intent = await apiRequest<{
+  const { expectedFree: _ignored, ...requestPayload } = payload;
+  let intent: {
     freeEnrolled?: boolean;
     message?: string;
     orderId?: number;
     amountPi?: number;
     memo?: string;
-  }>('/api/payments/create-intent', {
-    method: 'POST',
-    body: JSON.stringify({ ...payload, idempotencyKey }),
-  });
+    unlockToken?: string;
+  };
+
+  try {
+    intent = await fetchJsonWithTimeout('/api/payments/create-intent', { ...requestPayload, idempotencyKey }, 10000);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message.toLowerCase() : '';
+    if (isPiSdkAvailable() && (msg.includes('auth') || msg.includes('401') || msg.includes('sign in'))) {
+      await connectWithPi(['username', 'payments']);
+      intent = await fetchJsonWithTimeout('/api/payments/create-intent', { ...requestPayload, idempotencyKey }, 10000);
+    } else {
+      throw err;
+    }
+  }
 
   if (intent.freeEnrolled) {
+    if (intent.unlockToken) {
+      saveUnlockToken(payload.orderType, payload.referenceId, intent.unlockToken, payload.planSlug);
+    }
     return {
       status: 'free_enrolled',
       message: intent.message || 'Enrolment confirmed.',
+      orderId: intent.orderId,
+      unlockToken: intent.unlockToken,
     };
   }
 
-  const ready = await waitForPiSdk(2500);
+  const ready = await waitForPiSdk(3500);
   if (!ready || !window.Pi) {
-    await apiRequest('/api/payments/pi/cancel', {
-      method: 'POST',
-      body: JSON.stringify({ orderId: intent.orderId }),
-    }).catch(() => undefined);
+    await fetchJsonWithTimeout('/api/payments/pi/cancel', { orderId: intent.orderId }, 4000).catch(() => undefined);
 
     throw new Error(
-      `Order #${intent.orderId} requires Official Pi Browser Testnet settlement (${intent.amountPi} π). Open IFIOK-EN inside Pi Browser with server PI_NETWORK_API_KEY configured to complete payment.`
+      `Order #${intent.orderId} requires Official Pi Browser Testnet settlement (${intent.amountPi} π). Open https://ifiok-en.vercel.app inside Pi Browser to complete payment.`
     );
   }
 
@@ -694,59 +814,102 @@ export async function startPiPaymentFlow(payload: PaymentIntentPayload): Promise
   }
 
   return new Promise<PaymentFlowResult>((resolve, reject) => {
-    window.Pi!.createPayment(
-      {
-        amount: intent.amountPi!,
-        memo: intent.memo || `IFIOK-EN Order #${intent.orderId}`,
-        metadata: {
-          app: 'ifiok-en',
-          orderId: intent.orderId,
-          direction: 'user_to_app',
-          environment: 'testnet',
-        },
-      },
-      {
-        onReadyForServerApproval: async (paymentId: string) => {
-          try {
-            await apiRequest('/api/payments/pi/approve', {
-              method: 'POST',
-              body: JSON.stringify({ paymentId, orderId: intent.orderId }),
-            });
-          } catch (err) {
-            reject(err instanceof Error ? err : new Error(String(err)));
-          }
-        },
-        onReadyForServerCompletion: async (paymentId: string, txid: string) => {
-          try {
-            const done = await apiRequest<{ completed: boolean; txid: string; orderId: number }>(
-              '/api/payments/pi/complete',
-              {
-                method: 'POST',
-                body: JSON.stringify({ paymentId, txid }),
-              }
-            );
-            resolve({
-              status: 'completed',
-              message: `Testnet Pi payment verified and completed (Order #${done.orderId}).`,
-              txid: done.txid,
-              orderId: done.orderId,
-            });
-          } catch (err) {
-            reject(err instanceof Error ? err : new Error(String(err)));
-          }
-        },
-        onCancel: async (paymentId: string) => {
-          await apiRequest('/api/payments/pi/cancel', {
-            method: 'POST',
-            body: JSON.stringify({ paymentId, orderId: intent.orderId }),
-          }).catch(() => undefined);
-          reject(new Error('Pi payment was cancelled.'));
-        },
-        onError: (error: Error, payment?: unknown) => {
-          console.error('[PI PAYMENT ERROR]', error, payment);
-          reject(new Error(error?.message || 'Unable to complete Pi payment. Please try again.'));
-        },
+    let settled = false;
+    const safeReject = (err: Error) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
       }
-    );
+    };
+    const safeResolve = (result: PaymentFlowResult) => {
+      if (!settled) {
+        settled = true;
+        resolve(result);
+      }
+    };
+
+    try {
+      window.Pi!.createPayment(
+        {
+          amount: intent.amountPi!,
+          memo: intent.memo || `IFIOK-EN Order #${intent.orderId}`,
+          metadata: {
+            app: 'ifiok-en',
+            orderId: intent.orderId,
+            orderType: payload.orderType,
+            referenceId: payload.referenceId,
+            ...(payload.planSlug ? { planSlug: payload.planSlug } : {}),
+            direction: 'user_to_app',
+            environment: 'testnet',
+          },
+        },
+        {
+          onReadyForServerApproval: async (paymentId: string) => {
+            try {
+              await fetchJsonWithTimeout(
+                '/api/payments/pi/approve',
+                {
+                  paymentId,
+                  orderId: intent.orderId,
+                  expectedAmountPi: intent.amountPi,
+                },
+                4800
+              );
+            } catch (err) {
+              safeReject(err instanceof Error ? err : new Error(String(err)));
+            }
+          },
+          onReadyForServerCompletion: async (paymentId: string, txid: string) => {
+            try {
+              const done = await fetchJsonWithTimeout<{
+                completed: boolean;
+                txid?: string;
+                orderId?: number;
+                unlockToken?: string;
+              }>(
+                '/api/payments/pi/complete',
+                {
+                  paymentId,
+                  txid,
+                  orderId: intent.orderId,
+                  orderType: payload.orderType,
+                  referenceId: payload.referenceId,
+                  quantity: payload.quantity,
+                  planSlug: payload.planSlug,
+                },
+                10000
+              );
+              if (done.unlockToken) {
+                saveUnlockToken(payload.orderType, payload.referenceId, done.unlockToken, payload.planSlug);
+              }
+              const resolvedOrderId = done.orderId || intent.orderId;
+              safeResolve({
+                status: 'completed',
+                message: `Testnet Pi payment verified and completed (Order #${resolvedOrderId}).`,
+                txid: done.txid || txid,
+                orderId: resolvedOrderId,
+                unlockToken: done.unlockToken,
+              });
+            } catch (err) {
+              safeReject(err instanceof Error ? err : new Error(String(err)));
+            }
+          },
+          onCancel: async (paymentId: string) => {
+            await fetchJsonWithTimeout(
+              '/api/payments/pi/cancel',
+              { paymentId, orderId: intent.orderId },
+              4500
+            ).catch(() => undefined);
+            safeReject(new Error('Pi payment was cancelled.'));
+          },
+          onError: (error: Error, payment?: unknown) => {
+            console.error('[PI PAYMENT ERROR]', error, payment);
+            safeReject(new Error(error?.message || 'Unable to complete Pi payment. Please try again.'));
+          },
+        }
+      );
+    } catch (err) {
+      safeReject(err instanceof Error ? err : new Error('Unable to launch Pi Wallet payment.'));
+    }
   });
 }
